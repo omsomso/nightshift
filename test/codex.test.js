@@ -24,7 +24,11 @@ for (const mode of ['normal', 'early']) {
     const events = [];
     const result = await new CodexAdapter(options(mode)).execute(sampleTask, { onEvent: event => events.push(event) });
     assert.equal(result.summary, 'Fixture résumé 🦉');
-    assert.equal(events.find(x => x.type === 'output').text, 'Résumé 🦉');
+    assert.deepEqual(events.filter(x => x.type === 'output').map(x => x.text), ['Résumé 🦉']);
+    const usage = events.find(x => x.type === 'usage');
+    assert.deepEqual([usage.requests, usage.tokens], [2, { input: 300, cachedInput: 190, output: 30, reasoningOutput: 5 }]);
+    assert.equal(usage.threadTotal.totalTokens, 330);
+    assert.ok(events.findIndex(x => x.type === 'usage') < events.findIndex(x => x.type === 'turn-completed'));
     assert.equal(events.filter(x => x.type === 'turn-completed').length, 1);
     assert.ok(events.findIndex(x => x.type === 'session') < events.findIndex(x => x.type === 'dispatch-intent'));
   });

@@ -58,7 +58,15 @@ createInterface({ input: process.stdin }).on('line', line => {
     : { summary: 'Fixture résumé 🦉', evidence: ['fixture:README.md'] };
   notify('turn/completed', { threadId: 'unrelated-thread', turn: { id: currentTurn, status: 'completed' } });
   notify('turn/completed', { threadId, turn: { id: 'unrelated-turn', status: 'failed' } });
-  const delta = Buffer.from(JSON.stringify({ method: 'item/agentMessage/delta', params: { ...ids, delta: 'Résumé 🦉' } }) + '\n');
+  // Several small deltas that the adapter must merge into one output event.
+  notify('item/agentMessage/delta', { ...ids, itemId: 'message-1', delta: 'Ré' });
+  notify('item/agentMessage/delta', { ...ids, itemId: 'message-1', delta: 'sumé ' });
+  const usage = (input, cached, output, reasoning) => ({ inputTokens: input, cachedInputTokens: cached, outputTokens: output,
+    reasoningOutputTokens: reasoning, totalTokens: input + output });
+  notify('thread/tokenUsage/updated', { ...ids, tokenUsage: { last: usage(100, 40, 10, 5), total: usage(100, 40, 10, 5) } });
+  notify('thread/tokenUsage/updated', { threadId, turnId: 'unrelated-turn', tokenUsage: { last: usage(9999, 0, 9999, 0), total: usage(9999, 0, 9999, 0) } });
+  notify('thread/tokenUsage/updated', { ...ids, tokenUsage: { last: usage(200, 150, 20, 0), total: usage(300, 190, 30, 5) } });
+  const delta = Buffer.from(JSON.stringify({ method: 'item/agentMessage/delta', params: { ...ids, itemId: 'message-1', delta: '🦉' } }) + '\n');
   // Deliberately split inside an UTF-8 code point and inside the JSONL framing.
   const split = delta.indexOf(Buffer.from('🦉')) + 1;
   process.stdout.write(delta.subarray(0, split));

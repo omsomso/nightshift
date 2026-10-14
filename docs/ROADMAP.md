@@ -24,7 +24,7 @@
 - [x] Subscription-only Claude billing guard: stripped env, startup sign-in check, per-turn kill (live-checked).
 - [x] ChatGPT-only Codex billing guard: stripped env, forced ChatGPT login, startup and per-session account checks (live-checked).
 - [x] Run one mixed pairing (`npm run smoke -- codex:claude`, passed on the dev Mac).
-- [ ] Record Codex token usage (`thread/tokenUsage/updated`) and coalesce streamed output events.
+- [x] Record Codex token usage per turn and merge streamed output events (live-checked).
 
 Exit: one real task and follow-up run through each adapter without desktop clicks.
 

@@ -112,8 +112,12 @@ export class ClaudeSession {
     // Observed with 2.1.296: sign-in and API failures report subtype "success" with is_error=true.
     const status = message.is_error ? (message.subtype === 'success' ? 'error' : message.subtype)
       : message.subtype === 'success' ? 'completed' : message.subtype;
+    const u = message.usage ?? {};
+    // Normalized like Codex: input includes cached reads and cache writes.
+    const tokens = { input: (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0),
+      cachedInput: u.cache_read_input_tokens ?? 0, output: u.output_tokens ?? 0 };
     emit({ type: 'usage', threadId: sessionId, turnId: turn.turnId, costUsd: message.total_cost_usd,
-      numTurns: message.num_turns, durationMs: message.duration_ms, usage: message.usage });
+      numTurns: message.num_turns, durationMs: message.duration_ms, tokens, usage: message.usage });
     emit({ type: 'turn-completed', threadId: sessionId, turnId: turn.turnId, status, terminalReason: message.terminal_reason });
     const denials = message.permission_denials ?? [];
     for (const denial of denials) {

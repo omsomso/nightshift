@@ -106,10 +106,16 @@ first review replaced by a labelled forced failure with one extra requirement): 
 resumed the same saved worker thread, addressed the requirement, and the reviewer resumed
 its own thread and passed it.
 
-Not yet verified: turn interrupt, timeout behavior, and token
-usage (Codex reports it through `thread/tokenUsage/updated`, which is not recorded yet).
-A sandboxed agent shell may block OpenAI's servers (`workspace routing discovery timed
-out`); run live checks from a normal terminal.
+Usage: each `thread/tokenUsage/updated` notification's `last` covers one model request;
+Nightshift sums them per turn into a `usage` event (`requests`, `tokens` with input,
+cached input, output, and reasoning output) and keeps the thread `total`. Verified live:
+on a new thread the per-request sum equals Codex's total exactly (worker: 4 requests,
+97,063 input tokens, 61,056 cached, 1,140 output). Codex reports no cost; it draws on the
+ChatGPT plan. Streamed text is merged before saving (per 4 KB, 5 seconds, or item
+boundary): 8 output events for that run instead of about 938.
+
+Not yet verified: turn interrupt and timeout behavior. A sandboxed agent shell may block
+OpenAI's servers (`workspace routing discovery timed out`); run live checks from a normal terminal.
 
 ## Expected results
 
