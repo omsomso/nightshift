@@ -47,7 +47,10 @@ process.stdin.on('end', () => {
     mkdirSync('notes', { recursive: true });
     writeFileSync(`notes/task-${n}.txt`, `${process.env.FIXTURE_EDIT_CONTENT ?? 'done'} by claude fixture\n`);
   }
-  const result = isReview ? { passed: true, reason: 'Fixture review only.' }
+  const isPlanner = JSON.parse(value('--json-schema')).required.includes('tasks');
+  const result = isPlanner ? { id: 'Fixture Notes!', brief: 'Write two notes.', checks: ['node check.js'], allowedPaths: ['notes/'], notes: '',
+      tasks: [{ id: 'note-one', title: 'Write note one', acceptance: 'A first note exists.' }, { id: 'note-two', title: 'Write note two', acceptance: 'A second note exists.' }] }
+    : isReview ? { passed: true, reason: 'Fixture review only.' }
     : { summary: 'Fixture résumé 🦉', evidence: ['fixture:README.md'] };
   // An unrelated session's result must not complete this turn.
   send({ type: 'result', subtype: 'success', is_error: false, session_id: 'unrelated-session', structured_output: { summary: 'wrong', evidence: ['x'] } });

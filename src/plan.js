@@ -17,11 +17,15 @@ export const protectedPaths = ['.git', '.github/', '.claude/', '.codex/', '.nigh
 
 const idPattern = /^[a-z0-9][a-z0-9-]{0,62}$/;
 
-// An owner-written plan: a brief, ordered tasks, the checks Nightshift runs, and limits.
+// An owner-approved plan: a brief, ordered tasks, the checks Nightshift runs, and limits.
 export function loadPlan(file) {
   const path = resolve(file);
-  const plan = JSON.parse(readFileSync(path, 'utf8'));
-  const fail = message => { throw new Error(`Invalid plan ${file}: ${message}`); };
+  return validatePlan(JSON.parse(readFileSync(path, 'utf8')), dirname(path), file);
+}
+
+// `repo` resolves against baseDir. Returns a normalized plan or throws with the reason.
+export function validatePlan(plan, baseDir, label = 'plan') {
+  const fail = message => { throw new Error(`Invalid plan ${label}: ${message}`); };
   if (!idPattern.test(plan.id ?? '')) fail('id must be lowercase letters, digits, and dashes.');
   if (typeof plan.repo !== 'string' || !plan.repo) fail('repo is required.');
   if (typeof plan.brief !== 'string' || !plan.brief.trim()) fail('brief is required.');
@@ -48,7 +52,7 @@ export function loadPlan(file) {
     if (!(Number(value) > 0)) fail(`limit ${key} must be a positive number.`);
   }
   return {
-    id: plan.id, repo: resolve(dirname(path), plan.repo), base: plan.base ?? 'HEAD', brief: plan.brief.trim(),
+    id: plan.id, repo: resolve(baseDir, plan.repo), base: plan.base ?? 'HEAD', brief: plan.brief.trim(),
     checks: plan.checks, allowedPaths, limits,
     tasks: plan.tasks.map(task => ({ id: task.id, title: task.title.trim(), acceptance: task.acceptance.trim() }))
   };

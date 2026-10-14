@@ -17,7 +17,30 @@ Codex and Claude desktop chats. Nightshift will own programmatic agent sessions,
 give them a persistent project queue, verify results, and expose a remote-friendly
 chat interface. Closing the interface must not stop the supervisor.
 
-## Try it
+## Quick start
+
+Requires Node.js 22.13 or newer, and the Claude and/or Codex CLI signed in with a
+subscription (claude.ai, ChatGPT). From this folder:
+
+```sh
+node src/cli.js setup                                  # once, and after updating a CLI
+node src/cli.js run /path/to/repo/docs/PLAN.md --steps "1-10"
+```
+
+`run` has an agent turn the document's steps into a plan (one task per step, with
+acceptance criteria, checks, and allowed paths), shows it, and asks once. If you say
+yes, it runs in the background in its own worktree until the plan is done or needs
+you. `list` shows all plans; `merge <id>` is the final approval. Plans live in
+`~/.nightshift/plans/<id>`.
+
+For a window and menu-bar view with notifications, build the app (see `app/README.md`):
+
+```sh
+app/build.sh
+open app/build/Nightshift.app
+```
+
+## Try it offline
 
 Requires Node.js 22.13 or newer (for built-in SQLite). No dependency installation is needed.
 
@@ -73,6 +96,8 @@ for you to merge. See `docs/EDIT_MODE.md`.
 - `src/cli.js`: demo, status, serve, add, pause, resume, retry, and report commands.
 - `src/report.js`: morning report rendering.
 - `src/plan.js`, `src/workspace.js`: edit-mode plans, worktrees, checks, gates, and commits.
+- `src/planner.js`, `src/plans.js`, `src/home.js`: drafting from documents, plan lifecycle, `~/.nightshift`.
+- `app/`: the SwiftUI macOS app (window, menu bar, notifications) over the CLI.
 - `src/providers.js`: version-checked provider setup shared by `serve` and `smoke`.
 - `src/prompts.js`: provider-neutral worker/reviewer prompts and result schemas.
 - `src/adapters/`: simulated, Codex, and Claude workers and reviewers (`agent.js` is shared).
@@ -86,6 +111,7 @@ for you to merge. See `docs/EDIT_MODE.md`.
 - `test/supervisor.test.js`: behavioral checks for unattended execution.
 - `test/service.test.js`: store, lease, command, serve-loop, and report tests.
 - `test/edit.test.js`: edit-mode cycle, gates, limits, final review, and serve end to end.
+- `test/run.test.js`: setup pins, draft → background run → merge, and runner stop.
 - `test/codex.test.js`, `test/claude.test.js`: subprocess protocol and persisted session tests.
 
 ## Next milestone
