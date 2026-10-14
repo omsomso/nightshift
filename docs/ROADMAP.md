@@ -44,6 +44,9 @@ Exit: one real task and follow-up run through each adapter without desktop click
 
 - [x] One-command run from a document (`run`), plan drafts, background runner, `list`, `merge`.
 - [x] SwiftUI macOS app over the CLI: plans, progress, controls, notifications (`app/`).
+- [x] Side-by-side comparison with a plain agent session (docs/COMPARISON.md).
+- [ ] Planner reads project rules (AGENTS.md, CLAUDE.md) and includes the files they require in allowed paths.
+- [ ] Final review judges only what the plan allows; a failed final review becomes one bounded fix-up task.
 
 - [ ] Responsive project/task board and conversation viewer.
 - [ ] Live streamed output, file diffs, and verification results.
