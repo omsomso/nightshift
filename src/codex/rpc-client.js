@@ -4,7 +4,7 @@ import { JsonlDecoder } from '../jsonl.js';
 
 // JSONL transport only. Provider policy and task decisions belong above this layer.
 export class RpcClient extends EventEmitter {
-  constructor({ command = 'codex', args = ['app-server'], cwd, requestTimeoutMs = 30_000, maxLineBytes = 4_194_304 } = {}) {
+  constructor({ command = 'codex', args = ['app-server'], cwd, env, requestTimeoutMs = 30_000, maxLineBytes = 4_194_304 } = {}) {
     super();
     this.pending = new Map();
     this.nextId = 1;
@@ -12,7 +12,7 @@ export class RpcClient extends EventEmitter {
     this.lines = new JsonlDecoder({ label: 'Codex protocol', maxLineBytes });
     this.failure = null;
     this.closing = false;
-    this.child = spawn(command, args, { cwd, stdio: ['pipe', 'pipe', 'pipe'], shell: false });
+    this.child = spawn(command, args, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'], shell: false });
     this.closed = new Promise(resolve => this.child.once('close', resolve));
     this.child.on('error', error => this.fail(new Error(`Codex process could not start: ${error.message}`)));
     this.child.on('close', (code, signal) => {

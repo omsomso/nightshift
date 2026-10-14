@@ -1,17 +1,17 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { CodexAdapter, CodexReviewer } from './adapters/codex.js';
 import { ClaudeAdapter, ClaudeReviewer } from './adapters/claude.js';
 import { simulatedAdapter, simulatedReviewer } from './adapters/simulated.js';
-import { RpcClient } from './codex/rpc-client.js';
+import { createAppServer, chatgptEnv } from './codex/session.js';
 import { subscriptionEnv } from './claude/session.js';
 
 const providers = {
   codex: {
     env: 'CODEX', command: 'codex',
     options: (cwd, command) => ({ cwd, model: process.env.NIGHTSHIFT_CODEX_MODEL || undefined,
-      createClient: () => new RpcClient({ command, cwd }) }),
+      createClient: () => createAppServer({ command, cwd }) }),
     worker: options => new CodexAdapter(options), reviewer: options => new CodexReviewer(options)
   },
   claude: {
@@ -58,6 +58,16 @@ function requireSubscription(command) {
   return [status.authMethod, status.subscriptionType].filter(Boolean).join(' ');
 }
 
+// ChatGPT-plan-only billing for Codex, checked with the same stripped environment its
+// sessions get. The status line is never echoed: an API-key line includes part of the key.
+function requireChatgpt(command) {
+  const result = spawnSync(command, ['login', 'status'], { encoding: 'utf8', timeout: 10_000, env: chatgptEnv() });
+  const text = `${result.stdout ?? ''}\n${result.stderr ?? ''}`;
+  if (/Logged in using ChatGPT/.test(text)) return 'chatgpt';
+  if (/Not logged in/i.test(text)) throw new Error('Codex is not signed in. Run `codex login` with your ChatGPT account.');
+  throw new Error('Codex is not signed in with ChatGPT. Nightshift refuses API-key billing; run `codex login` with your ChatGPT account.');
+}
+
 export function gitRoot(repository) {
   const cwd = realpathSync(resolve(repository));
   execFileSync('git', ['-C', cwd, 'rev-parse', '--show-toplevel'], { stdio: ['ignore', 'pipe', 'pipe'] });
@@ -78,8 +88,9 @@ export function buildAgents(spec, repository) {
   const runtimes = Object.fromEntries([...new Set([pair.worker, pair.reviewer])].map(name => [name, checkedRuntime(name)]));
   const versions = Object.fromEntries(Object.entries(runtimes).map(([name, { version }]) => [`${name}Version`, version]));
   const build = (name, role) => providers[name][role](providers[name].options(cwd, runtimes[name].command));
-  const auth = runtimes.claude ? { claudeAuth: requireSubscription(runtimes.claude.command) } : {};
-  const label = name => `${name} ${runtimes[name].version}${name === 'claude' ? ` [${auth.claudeAuth}]` : ''}`;
+  const auth = { ...(runtimes.claude ? { claudeAuth: requireSubscription(runtimes.claude.command) } : {}),
+    ...(runtimes.codex ? { codexAuth: requireChatgpt(runtimes.codex.command) } : {}) };
+  const label = name => `${name} ${runtimes[name].version} [${auth[`${name}Auth`]}]`;
   return { worker: build(pair.worker, 'worker'), reviewer: build(pair.reviewer, 'reviewer'),
     project: { cwd, pairing: pair.pairing, ...versions, ...auth },
     describe: `worker ${label(pair.worker)}, reviewer ${label(pair.reviewer)}. Read-only policy; model usage may be billed.` };

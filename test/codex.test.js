@@ -7,7 +7,8 @@ import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { RpcClient } from '../src/codex/rpc-client.js';
 import { CodexAdapter, CodexReviewer } from '../src/adapters/codex.js';
-import { Supervisor } from '../src/supervisor.js';
+import { Supervisor, BillingGuardError } from '../src/supervisor.js';
+import { createAppServer } from '../src/codex/session.js';
 import { Store } from '../src/store.js';
 
 const fixtureFile = fileURLToPath(new URL('../fixtures/codex-server.js', import.meta.url));
@@ -45,7 +46,10 @@ for (const [mode, pattern] of [
   test(`adapter fails explicitly on ${mode}`, async () => {
     const events = [];
     await assert.rejects(() => new CodexAdapter(options(mode)).execute(sampleTask, { onEvent: event => events.push(event) }), pattern);
-    if (mode === 'approval') assert.equal(events.find(x => x.type === 'approval-required').requestId, 'approval-1');
+    if (mode === 'approval') {
+      const request = events.find(x => x.type === 'approval-required');
+      assert.deepEqual([request.requestId, request.command], ['approval-1', 'touch build.log']);
+    }
   });
 }
 
@@ -67,6 +71,33 @@ test('persistence failure prevents a turn from being dispatched', async () => {
     if (event.type === 'session') throw new Error('Disk unavailable');
   } }), /Disk unavailable/);
   assert.equal(events.some(x => x.type === 'dispatch-intent'), false);
+});
+
+test('Codex processes never see API-key variables and are told to refuse API-key login', async t => {
+  const names = ['OPENAI_API_KEY', 'OPENAI_BASE_URL', 'CODEX_API_KEY'];
+  const saved = Object.fromEntries(names.map(name => [name, process.env[name]]));
+  t.after(() => { for (const [name, value] of Object.entries(saved)) value === undefined ? delete process.env[name] : process.env[name] = value; });
+  for (const name of names) process.env[name] = 'should-not-leak';
+  const createClient = () => createAppServer({ command: process.execPath, baseArgs: [fixtureFile, 'guarded'], requestTimeoutMs: 2000 });
+  const result = await new CodexAdapter(options('normal', { createClient })).execute(sampleTask);
+  assert.equal(result.summary, 'Fixture résumé 🦉');
+});
+
+for (const [mode, pattern] of [['api-key-account', /signed in with apiKey/], ['other-provider', /model provider ollama/]]) {
+  test(`Codex ${mode} is refused before any turn starts`, async () => {
+    const events = [];
+    await assert.rejects(() => new CodexAdapter(options(mode)).execute(sampleTask, { onEvent: event => events.push(event) }),
+      error => error instanceof BillingGuardError && pattern.test(error.message));
+    assert.equal(events.some(x => x.type === 'dispatch-intent'), false);
+  });
+}
+
+test('the ChatGPT account check records plan type but never email', async () => {
+  const events = [];
+  await new CodexAdapter(options()).execute(sampleTask, { onEvent: event => events.push(event) });
+  const account = events.find(x => x.type === 'account');
+  assert.deepEqual([account.accountType, account.planType], ['chatgpt', 'plus']);
+  assert.doesNotMatch(JSON.stringify(events), /private@example\.com/);
 });
 
 test('supervisor persists distinct worker/reviewer sessions and streamed evidence', async t => {
@@ -94,7 +125,7 @@ function smokeFixture(t) {
   const directory = mkdtempSync(join(tmpdir(), 'nightshift-smoke-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   const command = join(directory, 'codex-fixture');
-  writeFileSync(command, `#!/usr/bin/env node\nif (process.argv[2] === '--version') console.log('codex-fixture 1'); else { process.argv[2] = 'normal'; import(${JSON.stringify(pathToFileURL(fixtureFile).href)}); }\n`, { mode: 0o700 });
+  writeFileSync(command, `#!/usr/bin/env node\nif (process.argv[2] === '--version') console.log('codex-fixture 1'); else if (process.argv[2] === 'login') { const auth = process.env.FIXTURE_CODEX_AUTH ?? 'chatgpt'; console.error(auth === 'chatgpt' ? 'Logged in using ChatGPT' : auth === 'api-key' ? 'Logged in using an API key - sk-proj-SECRET***' : 'Not logged in'); process.exitCode = auth === 'signed-out' ? 1 : 0; } else { process.argv[2] = 'normal'; import(${JSON.stringify(pathToFileURL(fixtureFile).href)}); }\n`, { mode: 0o700 });
   return { directory, stateDirectory: join(directory, 'state'),
     script: fileURLToPath(new URL('../src/smoke.js', import.meta.url)),
     env: { ...process.env, NIGHTSHIFT_CODEX_BIN: command, NIGHTSHIFT_CODEX_VERSION: 'codex-fixture 1' } };
@@ -107,11 +138,24 @@ test('VM smoke command runs end-to-end against a fixture and is idempotent', t =
   const first = Store.inspect(f.stateDirectory);
   assert.equal(first.tasks[0].status, 'done');
   assert.equal(first.project.codexVersion, 'codex-fixture 1');
+  assert.equal(first.project.codexAuth, 'chatgpt');
   run();
   const second = Store.inspect(f.stateDirectory);
   assert.equal(second.tasks[0].attempts, 1);
   assert.equal(second.events.length, first.events.length);
 });
+
+for (const [auth, pattern] of [['api-key', /refuses API-key billing/], ['signed-out', /not signed in/]]) {
+  test(`smoke command refuses a ${auth} Codex sign-in without echoing it`, t => {
+    const f = smokeFixture(t);
+    const result = spawnSync(process.execPath, [f.script, 'codex', process.cwd(), f.stateDirectory], {
+      env: { ...f.env, FIXTURE_CODEX_AUTH: auth }, encoding: 'utf8', timeout: 10_000 });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, pattern);
+    assert.doesNotMatch(result.stderr + result.stdout, /SECRET/);
+    assert.equal(existsSync(f.stateDirectory), false);
+  });
+}
 
 test('VM smoke command refuses an unpinned runtime before creating state', t => {
   const f = smokeFixture(t);

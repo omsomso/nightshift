@@ -1,8 +1,19 @@
-import { BlockedError } from '../supervisor.js';
+import { BlockedError, BillingGuardError } from '../supervisor.js';
 import { RpcClient } from './rpc-client.js';
 
+// ChatGPT-plan-only billing. These variables can supply or redirect an API key, so none
+// reach Codex, and Codex itself is told to refuse API-key login. There is no opt-out.
+export function chatgptEnv(env = process.env) {
+  return Object.fromEntries(Object.entries(env).filter(([name]) =>
+    !name.startsWith('OPENAI_') && !name.startsWith('AZURE_OPENAI_') && name !== 'CODEX_API_KEY'));
+}
+export const appServerArgs = ['app-server', '-c', 'forced_login_method="chatgpt"'];
+export function createAppServer({ command = 'codex', baseArgs = [], cwd, ...options } = {}) {
+  return new RpcClient({ command, args: [...baseArgs, ...appServerArgs], cwd, env: chatgptEnv(), ...options });
+}
+
 export class CodexSession {
-  constructor({ cwd, model, timeoutMs = 300_000, createClient = () => new RpcClient({ cwd }) }) {
+  constructor({ cwd, model, timeoutMs = 300_000, createClient = () => createAppServer({ cwd }) }) {
     if (!cwd) throw new Error('A project directory is required.');
     this.cwd = cwd;
     this.model = model;
@@ -16,6 +27,7 @@ export class CodexSession {
     const blockOnRequest = message => {
       emit({ type: 'approval-required', method: message.method, requestId: message.id,
         threadId: message.params?.threadId, turnId: message.params?.turnId,
+        ...(typeof message.params?.command === 'string' ? { command: message.params.command.slice(0, 500) } : {}),
         reason: message.params?.reason ?? 'Provider requires input that this adapter cannot supply.' });
       client.fail(new BlockedError(`Provider request requires human handling: ${message.method}`));
     };
@@ -23,12 +35,25 @@ export class CodexSession {
     try {
       await client.request('initialize', { clientInfo: { name: 'nightshift', title: 'Nightshift', version: '0.3.0' } });
       client.notify('initialized');
+      // Checked before any thread exists, so a wrong account never reaches a model.
+      const { account } = await client.request('account/read', { refreshToken: false }) ?? {};
+      if (account?.type !== 'chatgpt') {
+        throw new BillingGuardError(`Codex is signed in with ${account?.type ?? 'no account'}, not a ChatGPT plan; ` +
+          'Nightshift refuses API-key billing.');
+      }
+      emit({ type: 'account', accountType: account.type, planType: account.planType });
       // Both new and resumed sessions stay read-only in this compatibility milestone.
-      const params = { cwd: this.cwd, sandbox: 'readOnly', approvalPolicy: 'unlessTrusted',
+      // "never" means Codex never asks: the read-only sandbox refuses writes and network
+      // and reports the failure to the model. Nothing is approved. Values follow the
+      // schema generated from codex-cli 0.162.1.
+      const params = { cwd: this.cwd, sandbox: 'read-only', approvalPolicy: 'never', modelProvider: 'openai',
         ...(this.model ? { model: this.model } : {}) };
       const opened = session?.threadId
         ? await client.request('thread/resume', { ...params, threadId: session.threadId, excludeTurns: true })
         : await client.request('thread/start', params);
+      if (opened?.modelProvider !== 'openai') {
+        throw new BillingGuardError(`Codex selected model provider ${opened?.modelProvider ?? 'unknown'}, not openai; refusing to run.`);
+      }
       const threadId = opened?.thread?.id;
       if (!threadId || (session?.threadId && threadId !== session.threadId)) throw new Error('Codex returned an invalid thread ID.');
       if (opened.thread.status?.type === 'active') throw new BlockedError('Existing Codex thread is still active; reconciliation is required.');
@@ -91,7 +116,7 @@ export class CodexSession {
       emit({ type: 'dispatch-intent', threadId });
       const started = await Promise.race([client.request('turn/start', {
         threadId, input: [{ type: 'text', text: prompt }],
-        cwd: this.cwd, approvalPolicy: 'unlessTrusted', sandboxPolicy: { type: 'readOnly' }, outputSchema
+        cwd: this.cwd, approvalPolicy: 'never', sandboxPolicy: { type: 'readOnly' }, outputSchema
       }), completion]);
       turnId = started?.turn?.id;
       if (!turnId) throw new Error('Codex returned no turn ID; dispatch outcome is uncertain.');
