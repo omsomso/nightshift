@@ -1,10 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, existsSync } from 'node:fs';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { Store } from '../src/store.js';
 
 const cliFile = fileURLToPath(new URL('../src/cli.js', import.meta.url));
 const git = (cwd, ...args) => execFileSync('git', ['-C', cwd, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', ...args],
@@ -110,4 +111,37 @@ test('stop ends an idle runner promptly instead of after its poll interval', asy
   e.cli('stop', 'fixture-notes');
   await until(() => { try { process.kill(pid, 0); return false; } catch { return true; } }, 3000);
   assert.ok(Date.now() - started < 3000);
+});
+
+test('draft and run accept --base; the plan records it and its worktree starts there', async t => {
+  const e = setupEnv(t);
+  e.cli('setup');
+  const first = git(e.repo, 'rev-parse', 'HEAD');
+  writeFileSync(join(e.repo, 'later.txt'), 'later\n');
+  git(e.repo, 'add', '-A');
+  git(e.repo, 'commit', '-q', '-m', 'later');
+  const head = git(e.repo, 'rev-parse', 'HEAD');
+
+  const drafted = JSON.parse(e.cli('draft', 'docs/PLAN.md', '--json', '--base', 'HEAD~1'));
+  assert.equal(drafted.draft.plan.base, 'HEAD~1');
+  e.cli('start', drafted.id);
+  let state = Store.inspect(join(e.env.NIGHTSHIFT_HOME, 'plans', drafted.id));
+  assert.equal(state.plan.base, 'HEAD~1');
+  assert.equal(state.plan.baseCommit, first);
+  assert.equal(existsSync(join(state.plan.worktree, 'later.txt')), false, 'the worktree starts from the chosen commit');
+
+  const out = e.cli('run', 'docs/PLAN.md', '--yes', '--base', first);
+  assert.match(out, new RegExp(`starting from ${first}`));
+  const id = /Started: plan (\S+)/.exec(out)[1];
+  state = Store.inspect(join(e.env.NIGHTSHIFT_HOME, 'plans', id));
+  assert.equal(state.plan.baseCommit, first);
+
+  const plain = JSON.parse(e.cli('draft', 'docs/PLAN.md', '--json'));
+  assert.equal(plain.draft.plan.base, 'HEAD');
+  e.cli('start', plain.id);
+  assert.equal(Store.inspect(join(e.env.NIGHTSHIFT_HOME, 'plans', plain.id)).plan.baseCommit, head);
+
+  const bad = spawnSync(process.execPath, [cliFile, 'draft', 'docs/PLAN.md', '--base', 'no-such-ref'], { cwd: e.repo, env: e.env, encoding: 'utf8' });
+  assert.equal(bad.status, 1);
+  assert.match(bad.stderr, /--base no-such-ref is not a commit/);
 });
