@@ -20,11 +20,31 @@ const emptyState = () => ({ version: 1, paused: false, tasks: [], events: [] });
 function open(file, { readOnly = false } = {}) {
   const db = new DatabaseSync(file, { readOnly, timeout: 5000 });
   if (!readOnly) {
-    db.exec('PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;');
-    const { user_version: current } = db.prepare('PRAGMA user_version').get();
-    if (current > migrations.length) { db.close(); throw new Error('State was written by a newer Nightshift; refusing to modify it.'); }
-    for (let version = current; version < migrations.length; version++) {
-      transaction(db, () => { db.exec(migrations[version]); db.exec(`PRAGMA user_version = ${version + 1}`); });
+    // Switching a new file to WAL ignores the busy timeout, so retry briefly when another
+    // process is doing the same at that moment.
+    for (let attempt = 0; ; attempt++) {
+      try {
+        if (db.prepare('PRAGMA journal_mode').get().journal_mode !== 'wal') db.exec('PRAGMA journal_mode = WAL');
+        break;
+      } catch (error) {
+        if (error.errcode !== 5 || attempt >= 100) { db.close(); throw error; }
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+      }
+    }
+    db.exec('PRAGMA synchronous = FULL;');
+    // Each step re-reads the version inside its write lock, so two processes opening a new
+    // database at the same moment cannot both apply the same migration.
+    for (let done = false; !done;) {
+      try {
+        done = transaction(db, () => {
+          const { user_version: version } = db.prepare('PRAGMA user_version').get();
+          if (version > migrations.length) throw new Error('State was written by a newer Nightshift; refusing to modify it.');
+          if (version === migrations.length) return true;
+          db.exec(migrations[version]);
+          db.exec(`PRAGMA user_version = ${version + 1}`);
+          return false;
+        });
+      } catch (error) { db.close(); throw error; }
     }
   }
   return db;
@@ -73,8 +93,13 @@ export class Store {
     }
     const db = open(file, { readOnly: true });
     try {
+      // Another process may have created the file but not yet its tables.
+      if (db.prepare('PRAGMA user_version').get().user_version < migrations.length) return { ...emptyState(), pendingCommands: 0, runner: null };
       const pendingCommands = db.prepare('SELECT COUNT(*) AS n FROM commands WHERE applied_at IS NULL').get().n;
-      return { ...load(db), pendingCommands };
+      const lease = db.prepare('SELECT pid, host, expires_at FROM lease WHERE id = 1').get();
+      const runner = lease ? { pid: lease.pid, host: lease.host, expiresAt: lease.expires_at,
+        alive: lease.host === hostname() && pidAlive(lease.pid) && Date.now() < lease.expires_at } : null;
+      return { ...load(db), pendingCommands, runner };
     } finally { db.close(); }
   }
 

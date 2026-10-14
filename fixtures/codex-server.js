@@ -66,7 +66,10 @@ createInterface({ input: process.stdin }).on('line', line => {
     mkdirSync(join(m.params.cwd, 'notes'), { recursive: true });
     writeFileSync(join(m.params.cwd, 'notes', `task-${n}.txt`), `${process.env.FIXTURE_EDIT_CONTENT ?? 'done'} by codex fixture\n`);
   }
-  const result = isReview ? { passed: true, reason: 'Fixture review only.' }
+  const isPlanner = m.params.outputSchema.required.includes('tasks');
+  const result = isPlanner ? { id: 'Fixture Notes!', brief: 'Write two notes.', checks: ['node check.js'], allowedPaths: ['notes/'], notes: '',
+      tasks: [{ id: 'note-one', title: 'Write note one', acceptance: 'A first note exists.' }, { id: 'note-two', title: 'Write note two', acceptance: 'A second note exists.' }] }
+    : isReview ? { passed: true, reason: 'Fixture review only.' }
     : { summary: 'Fixture résumé 🦉', evidence: ['fixture:README.md'] };
   notify('turn/completed', { threadId: 'unrelated-thread', turn: { id: currentTurn, status: 'completed' } });
   notify('turn/completed', { threadId, turn: { id: 'unrelated-turn', status: 'failed' } });

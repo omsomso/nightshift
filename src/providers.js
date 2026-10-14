@@ -6,6 +6,9 @@ import { ClaudeAdapter, ClaudeReviewer } from './adapters/claude.js';
 import { simulatedAdapter, simulatedReviewer } from './adapters/simulated.js';
 import { createAppServer, chatgptEnv } from './codex/session.js';
 import { subscriptionEnv } from './claude/session.js';
+import { readConfig } from './home.js';
+import { ClaudeSession } from './claude/session.js';
+import { CodexSession } from './codex/session.js';
 
 const providers = {
   codex: {
@@ -28,20 +31,25 @@ export function parsePairing(spec) {
   return { worker, reviewer, pairing: `${worker}:${reviewer}` };
 }
 
-// Each provider binary must match the operator's exact pinned version string.
+export const providerNames = Object.keys(providers);
+export const providerCommand = name => process.env[`NIGHTSHIFT_${providers[name].env}_BIN`] || readConfig().commands?.[name] || providers[name].command;
+export const installedVersion = name => execFileSync(providerCommand(name), ['--version'], { encoding: 'utf8', timeout: 10_000 }).trim();
+
+// Each provider binary must match the exact version pinned by `setup` (or the environment).
+// A CLI update therefore stops Nightshift until someone re-runs setup and accepts it.
 function checkedRuntime(name) {
-  const { env, command: fallback } = providers[name];
-  const command = process.env[`NIGHTSHIFT_${env}_BIN`] || fallback;
-  const expected = process.env[`NIGHTSHIFT_${env}_VERSION`];
-  if (!expected) throw new Error(`Set NIGHTSHIFT_${env}_VERSION to the exact output of your installed ${fallback} --version.`);
+  const { env } = providers[name];
+  const command = providerCommand(name);
+  const expected = process.env[`NIGHTSHIFT_${env}_VERSION`] || readConfig().pins?.[name];
+  if (!expected) throw new Error(`No pinned ${name} version. Run \`node src/cli.js setup\` (or set NIGHTSHIFT_${env}_VERSION).`);
   const actual = execFileSync(command, ['--version'], { encoding: 'utf8', timeout: 10_000 }).trim();
-  if (actual !== expected) throw new Error(`${name} version mismatch. Expected ${expected}; found ${actual}.`);
+  if (actual !== expected) throw new Error(`${name} version mismatch. Expected ${expected}; found ${actual}. Run \`node src/cli.js setup\` to accept the new version.`);
   return { command, version: actual };
 }
 
 // Subscription-only billing: refuse to start unless the CLI, seeing the same stripped
 // environment its turns will get, reports a claude.ai sign-in. Records only method and plan.
-function requireSubscription(command) {
+export function requireSubscription(command) {
   let text;
   try {
     text = execFileSync(command, ['auth', 'status'], { encoding: 'utf8', timeout: 10_000,
@@ -60,7 +68,7 @@ function requireSubscription(command) {
 
 // ChatGPT-plan-only billing for Codex, checked with the same stripped environment its
 // sessions get. The status line is never echoed: an API-key line includes part of the key.
-function requireChatgpt(command) {
+export function requireChatgpt(command) {
   const result = spawnSync(command, ['login', 'status'], { encoding: 'utf8', timeout: 10_000, env: chatgptEnv() });
   const text = `${result.stdout ?? ''}\n${result.stderr ?? ''}`;
   if (/Logged in using ChatGPT/.test(text)) return 'chatgpt';
@@ -112,4 +120,15 @@ export function checkProject(existing, project) {
       throw new Error(`This state was created with a different ${key.replace('Version', '')} version. Reconcile it before migrating.`);
     }
   }
+}
+
+// A read-only session for drafting a plan, with the same version and billing checks.
+export function buildPlanner(name, repository) {
+  if (!providers[name]) throw new Error(`Unknown provider ${name}. Use claude or codex.`);
+  const cwd = gitRoot(repository);
+  const runtime = checkedRuntime(name);
+  const auth = name === 'claude' ? requireSubscription(runtime.command) : requireChatgpt(runtime.command);
+  const options = providers[name].options(cwd, runtime.command, { timeoutMs: 600_000 });
+  return { session: name === 'claude' ? new ClaudeSession(options) : new CodexSession(options),
+    describe: `${name} ${runtime.version} [${auth}]` };
 }

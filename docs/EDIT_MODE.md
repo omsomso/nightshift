@@ -77,7 +77,10 @@ own state.
 
 ## Using it
 
-Write a plan file (JSON). `repo` is relative to the plan file; `allowedPaths` are
+Usually you do not write the plan by hand: `node src/cli.js run <doc> [--steps ...]` (or
+New Plan in the app) has a read-only agent draft it from a document in the repository,
+one task per step without inventing or reordering steps, and you approve the draft
+before anything runs. To write one by hand instead, use a plan file (JSON). `repo` is relative to the plan file; `allowedPaths` are
 repository-relative prefixes (omit for the whole repository); `limits` override the
 defaults above.
 

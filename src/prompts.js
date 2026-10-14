@@ -81,3 +81,35 @@ export function finalReviewPrompt(plan, planChange, checks) {
     'Return passed=true only if the brief and every task are fully met. Otherwise passed=false with what is missing or wrong.'
   ].join('\n');
 }
+
+// Planning: turn the owner's own document into a plan. The owner approves it before anything runs.
+export const planSchema = {
+  type: 'object', additionalProperties: false,
+  properties: {
+    id: { type: 'string' }, brief: { type: 'string' },
+    checks: { type: 'array', items: { type: 'string' } },
+    allowedPaths: { type: 'array', items: { type: 'string' } },
+    tasks: { type: 'array', items: { type: 'object', additionalProperties: false,
+      properties: { id: { type: 'string' }, title: { type: 'string' }, acceptance: { type: 'string' } },
+      required: ['id', 'title', 'acceptance'] } },
+    notes: { type: 'string' }
+  },
+  required: ['id', 'brief', 'checks', 'allowedPaths', 'tasks', 'notes']
+};
+
+export function plannerPrompt({ doc, steps, request }) {
+  return [
+    'You are the Nightshift planner, in a read-only conversation. Turn the owner\'s document into an implementation plan.',
+    'Do not edit files, install tools, or contact external systems.',
+    `Task: read ${doc} in this repository${steps ? `, and plan these steps from it: ${steps}` : ', and plan the steps it describes that are not done yet'}.`,
+    request ? `The owner adds: ${request}` : '',
+    'Rules:',
+    '- One task per step, in the document\'s order. Do not invent, merge, split, or reorder steps. If a step is already done in the code, leave it out and say so in notes.',
+    '- Each task: a short kebab-case id, a title, and acceptance criteria that a reviewer can check against the code and the checks.',
+    '- checks: commands that already exist in this repository (for example package scripts, make or ctest targets), run without network access, and pass today if you can tell. Prefer fast ones. At least one.',
+    '- allowedPaths: the narrowest repository-relative directory prefixes (ending in /) the steps need; [""] only if the whole repository is truly needed.',
+    '- id: a short kebab-case name for the plan. brief: two or three sentences on the overall goal, in the document\'s own terms.',
+    '- notes: anything the owner should know before approving: skipped steps, missing checks, risky steps, or assumptions. Empty string if none.',
+    'Return JSON matching the schema.'
+  ].filter(Boolean).join('\n');
+}

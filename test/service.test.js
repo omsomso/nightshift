@@ -203,3 +203,18 @@ test('the report separates simulated, blocked, refused, and billed results', () 
   assert.doesNotMatch(report, /Old task/);
   assert.throws(() => renderReport(state, { since: 'yesterday-ish' }), /ISO/);
 });
+
+test('many processes opening a new state at once neither fail nor double-migrate', async t => {
+  const directory = tempDir(t);
+  const storeUrl = new URL('../src/store.js', import.meta.url).href;
+  const script = `const { Store } = await import(${JSON.stringify(storeUrl)});
+    for (let i = 0; i < 20; i++) { Store.inspect(process.argv[1]); Store.enqueue(process.argv[1], 'pause'); }`;
+  const runs = Array.from({ length: 6 }, () => new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ['--input-type=module', '-e', script, directory], { stdio: ['ignore', 'ignore', 'pipe'] });
+    let stderr = '';
+    child.stderr.on('data', chunk => { stderr += chunk; });
+    child.on('exit', code => code === 0 ? resolve() : reject(new Error(stderr)));
+  }));
+  await Promise.all(runs);
+  assert.equal(Store.inspect(directory).pendingCommands, 120);
+});
