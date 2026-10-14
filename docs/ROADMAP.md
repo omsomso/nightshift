@@ -15,13 +15,12 @@
 - [x] Implement local stdio initialization, thread start/resume, and turn streaming (fixture-tested).
 - [x] Persist session IDs and correlate responses, errors, and approval requests (fixture-tested).
 - [x] Exercise one harmless repository task with an evidence-based review (codex:codex passed, dev Mac).
-- [ ] Exercise a review failure and resumed repair turn on a real run (either provider).
+- [x] Exercise a review failure and resumed repair turn on a real run (Claude and Codex; `npm run repair:check`).
 - [x] Test disconnect, process failure, stale state, and permission blockers against protocol fixtures.
 - [ ] Repeat compatibility/failure checks against the installed Codex build on the VM.
 - [x] Claude headless-CLI adapter with the same session, event, and blocker handling (fixture-tested).
 - [x] Real `claude` 2.1.296 accepts the read-only flag set and stream shape (unsigned probe only).
 - [x] Sign the Claude CLI in and run `npm run claude:smoke` once (2026-10-14, dev Mac, passed).
-- [ ] Exercise a Claude review failure and resumed repair turn on a real run.
 - [x] Subscription-only Claude billing guard: stripped env, startup sign-in check, per-turn kill (live-checked).
 - [x] ChatGPT-only Codex billing guard: stripped env, forced ChatGPT login, startup and per-session account checks (live-checked).
 - [x] Run one mixed pairing (`npm run smoke -- codex:claude`, passed on the dev Mac).
@@ -65,6 +64,6 @@ protocol subsets. On the development Mac, codex:codex, claude:claude, and codex:
 read-only runs have all passed review (see the setup docs); no adapter has edited files.
 Neither adapter has run on the owner's VM or accessed existing chats. Commands run from
 an agent sandbox may lack network access to OpenAI; run live checks from a normal terminal.
-Run `npm test` (70 tests) and `npm run demo` for the offline baseline. The live smoke
+Run `npm test` (73 tests) and `npm run demo` for the offline baseline. The live smoke
 commands are separate and can consume provider usage. Their version pins are operator
 checks, not declarations that a specific release has been certified.

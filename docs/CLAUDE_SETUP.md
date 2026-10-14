@@ -76,8 +76,13 @@ sign-in, model `claude-opus-5-5`):
   does not show who pays. `buildAgents` records `claude auth status` instead, keeping
   only method and plan (for example `claude.ai max`) as `project.claudeAuth`.
 
-Still unverified: resume of a saved session (needs a review failure and repair turn),
-the `--max-budget-usd` cap being hit, a denial on a real run, and timeout behavior.
+Repair loop, verified live 2026-10-14 (`npm run repair:check -- claude <repo>` harness,
+first review replaced by a labelled forced failure with one extra requirement): attempt 2
+resumed the same saved worker session, addressed the requirement, and the reviewer resumed
+its own session and passed it. The resumed reviewer referred to findings from its first turn.
+
+Still unverified: the `--max-budget-usd` cap being hit, a denial on a real run, and
+timeout behavior.
 
 ## Billing: subscription only
 

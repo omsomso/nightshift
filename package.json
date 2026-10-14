@@ -13,6 +13,7 @@
     "status": "node src/cli.js status",
     "smoke": "node src/smoke.js",
     "codex:smoke": "node src/smoke.js codex",
-    "claude:smoke": "node src/smoke.js claude"
+    "claude:smoke": "node src/smoke.js claude",
+    "repair:check": "node src/repair-check.js"
   }
 }

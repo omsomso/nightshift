@@ -168,6 +168,17 @@ for (const pairing of ['claude', 'codex:claude', 'claude:codex']) {
   });
 }
 
+const repairScript = fileURLToPath(new URL('../src/repair-check.js', import.meta.url));
+for (const pairing of ['claude', 'codex', 'codex:claude']) {
+  test(`repair check forces one review failure and resumes both ${pairing} sessions`, t => {
+    const f = smokeFixture(t);
+    const output = execFileSync(process.execPath, [repairScript, pairing, process.cwd(), f.stateDirectory], { env: f.env, encoding: 'utf8', timeout: 20_000 });
+    const report = JSON.parse(output.slice(output.indexOf('{')));
+    assert.deepEqual(report.checks, { forcedFailureApplied: true, secondAttemptRan: true, workerResumed: true, reviewerResumed: true, passed: true });
+    assert.ok(Store.inspect(f.stateDirectory).events.some(e => e.type === 'review-failed' && /FORCED FAILURE/.test(e.detail)));
+  });
+}
+
 test('smoke command refuses to reuse state with a different provider pairing', t => {
   const f = smokeFixture(t);
   execFileSync(process.execPath, [smokeScript, 'claude', process.cwd(), f.stateDirectory], { env: f.env, encoding: 'utf8', timeout: 10_000 });
