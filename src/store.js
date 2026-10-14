@@ -13,7 +13,8 @@ const migrations = [
    CREATE TRIGGER events_no_delete BEFORE DELETE ON events BEGIN SELECT RAISE(ABORT, 'events are append-only'); END;
    CREATE TABLE lease (id INTEGER PRIMARY KEY CHECK (id = 1), owner TEXT NOT NULL, pid INTEGER NOT NULL,
      host TEXT NOT NULL, acquired_at TEXT NOT NULL, expires_at INTEGER NOT NULL);
-   CREATE TABLE commands (seq INTEGER PRIMARY KEY, type TEXT NOT NULL, payload TEXT, created_at TEXT NOT NULL, applied_at TEXT);`
+   CREATE TABLE commands (seq INTEGER PRIMARY KEY, type TEXT NOT NULL, payload TEXT, created_at TEXT NOT NULL, applied_at TEXT);`,
+  `CREATE INDEX events_task_id ON events (task_id);`
 ];
 const emptyState = () => ({ version: 1, paused: false, tasks: [], events: [] });
 
@@ -94,7 +95,8 @@ export class Store {
     const db = open(file, { readOnly: true });
     try {
       // Another process may have created the file but not yet its tables.
-      if (db.prepare('PRAGMA user_version').get().user_version < migrations.length) return { ...emptyState(), pendingCommands: 0, runner: null };
+      // Older versions are readable as they are; a writer upgrades them on open.
+      if (db.prepare('PRAGMA user_version').get().user_version < 1) return { ...emptyState(), pendingCommands: 0, runner: null };
       const pendingCommands = db.prepare('SELECT COUNT(*) AS n FROM commands WHERE applied_at IS NULL').get().n;
       const lease = db.prepare('SELECT pid, host, expires_at FROM lease WHERE id = 1').get();
       const runner = lease ? { pid: lease.pid, host: lease.host, expiresAt: lease.expires_at,
