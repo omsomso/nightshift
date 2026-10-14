@@ -218,3 +218,27 @@ test('many processes opening a new state at once neither fail nor double-migrate
   await Promise.all(runs);
   assert.equal(Store.inspect(directory).pendingCommands, 120);
 });
+
+test('a version-1 database stays readable and upgrades to version 2 on open, keeping its events', t => {
+  const directory = tempDir(t);
+  let store = new Store(directory);
+  store.acquire();
+  const supervisor = new Supervisor(store, simulatedAdapter, simulatedReviewer);
+  supervisor.add(task('a'));
+  supervisor.add(task('b'));
+  store.release();
+  // Roll the file back to the version-1 schema.
+  let db = new DatabaseSync(join(directory, 'nightshift.db'));
+  db.exec('DROP INDEX events_task_id; PRAGMA user_version = 1;');
+  db.close();
+  const before = Store.inspect(directory);
+  assert.deepEqual(before.tasks.map(item => item.id), ['a', 'b'], 'readable before any writer upgrades it');
+
+  store = held(t, directory);
+  assert.deepEqual(store.read().events, before.events);
+  db = new DatabaseSync(join(directory, 'nightshift.db'));
+  t.after(() => db.close());
+  assert.equal(db.prepare('PRAGMA user_version').get().user_version, 2);
+  assert.deepEqual(db.prepare("PRAGMA index_list('events')").all().map(index => index.name), ['events_task_id']);
+  assert.match(db.prepare("EXPLAIN QUERY PLAN SELECT * FROM events WHERE task_id = 'a'").all().map(row => row.detail).join(' '), /events_task_id/);
+});
