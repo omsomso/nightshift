@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { tmpdir } from 'node:os';
+import { tmpdir, hostname } from 'node:os';
+import { DatabaseSync } from 'node:sqlite';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -59,4 +60,58 @@ test('logs prints the tail of a plan runner log and rejects unknown plans', t =>
   assert.equal(unknown.status, 1);
   assert.match(unknown.stderr, /No plan or draft named missing/);
   assert.equal(e.run('logs', 'notes', '--lines', '0').status, 1);
+});
+
+// Edits a plan's saved state directly, as a runner or a merge would have.
+function patchState(dir, { plan, lease } = {}) {
+  const db = new DatabaseSync(join(dir, 'nightshift.db'));
+  try {
+    if (plan) {
+      const current = JSON.parse(db.prepare("SELECT value FROM meta WHERE key = 'plan'").get().value);
+      db.prepare("UPDATE meta SET value = ? WHERE key = 'plan'").run(JSON.stringify({ ...current, ...plan }));
+    }
+    if (lease) db.prepare('INSERT OR REPLACE INTO lease (id, owner, pid, host, acquired_at, expires_at) VALUES (1, ?, ?, ?, ?, ?)')
+      .run('test', lease, hostname(), new Date().toISOString(), Date.now() + 60_000);
+  } finally { db.close(); }
+}
+
+test('discard removes a draft, or a started plan with its worktree and branch, only with --yes', t => {
+  const e = setupEnv(t);
+  const draftDir = e.draft('sketch');
+  const asked = e.run('discard', 'sketch');
+  assert.equal(asked.status, 1);
+  assert.match(asked.stderr, /would remove:[\s\S]*draft directory[\s\S]*--yes/);
+  assert.equal(existsSync(draftDir), true);
+  assert.match(e.cli('discard', 'sketch', '--yes'), /Discarded plan sketch/);
+  assert.equal(existsSync(draftDir), false);
+
+  const dir = e.startedPlan('work');
+  const worktree = join(dir, 'worktree');
+  writeFileSync(join(worktree, 'notes', 'wip.txt'), 'unfinished\n');
+  const preview = e.run('discard', 'work');
+  assert.equal(preview.status, 1);
+  assert.match(preview.stderr, /worktree .*worktree[\s\S]*branch nightshift\/work[\s\S]*directory/);
+  assert.equal(existsSync(worktree), true);
+  e.cli('discard', 'work', '--yes');
+  assert.equal(existsSync(dir), false);
+  assert.equal(git(e.repo, 'branch', '--list', 'nightshift/work'), '');
+  assert.doesNotMatch(git(e.repo, 'worktree', 'list'), /work/);
+  assert.equal(e.run('discard', 'work', '--yes').status, 1, 'unknown plans are refused');
+});
+
+test('discard refuses while the runner is alive and refuses merged plans', t => {
+  const e = setupEnv(t);
+  const live = e.startedPlan('live');
+  patchState(live, { lease: process.pid });
+  const refused = e.run('discard', 'live', '--yes');
+  assert.equal(refused.status, 1);
+  assert.match(refused.stderr, /running runner/);
+  assert.equal(existsSync(join(live, 'worktree')), true);
+
+  const merged = e.startedPlan('shipped');
+  patchState(merged, { plan: { status: 'merged' } });
+  const kept = e.run('discard', 'shipped', '--yes');
+  assert.equal(kept.status, 1);
+  assert.match(kept.stderr, /is merged/);
+  assert.match(git(e.repo, 'branch', '--list', 'nightshift/shipped'), /nightshift\/shipped/);
 });

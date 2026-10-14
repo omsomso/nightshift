@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { buildPlanner, providerNames, installedVersion, providerCommand, requireSubscription, requireChatgpt } from './providers.js';
 import { draftPlan } from './planner.js';
 import { home, planDir, readConfig, writeConfig, freePlanId } from './home.js';
-import { createPlan, saveDraft, startPlan, stopRunner, mergePlan, summarize, listPlans } from './plans.js';
+import { createPlan, saveDraft, startPlan, stopRunner, mergePlan, discardPlan, summarize, listPlans } from './plans.js';
 
 const usage = `Usage: node src/cli.js <command> [options]
 
@@ -25,6 +25,7 @@ const usage = `Usage: node src/cli.js <command> [options]
   start <id> | stop <id>       Start or stop a plan's background runner
   list [--json]                All plans in ~/.nightshift/plans with progress
   logs <id> [--lines n]        Print the last n lines (default 40) of a plan's runner log
+  discard <id> --yes           Remove an unmerged plan: its draft, or its worktree, branch, and directory
   merge <id>                   Approve: merge a finished plan's branch into the repository's current branch
 
   demo [state]                 Seed and run the simulated demo
@@ -260,8 +261,15 @@ function logs() {
   if (text) console.log(text.split('\n').slice(-lines).join('\n'));
 }
 
+function discard() {
+  if (!argument) throw new Error('discard requires a plan id (see `list`).');
+  const { removed, removes } = discardPlan(argument, { confirm: values.yes });
+  if (!removed) throw new Error(`discard ${argument} would remove:\n${removes.map(r => `  ${r}`).join('\n')}\nRun again with --yes to remove them.`);
+  console.log(`Discarded plan ${argument}:\n${removes.map(r => `  removed ${r}`).join('\n')}`);
+}
+
 const commands = {
-  demo, serve, add, plan, setup, draft, run, list, logs,
+  demo, serve, add, plan, setup, draft, run, list, logs, discard,
   start: () => start(),
   stop: async () => { if (!argument) throw new Error('stop requires a plan id.'); console.log(await stopRunner(argument) ? 'Stopped.' : 'Not running.'); },
   merge: async () => {
