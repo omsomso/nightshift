@@ -8,7 +8,7 @@
 - [x] Separate review step and conservative interrupted-run recovery.
 - [x] Simulated end-to-end demo and behavioral tests.
 
-## M1 — One real Codex task (next)
+## M1 — One real task per provider (next)
 
 - [ ] Record the VM OS and install/authenticate a specific Codex version there.
 - [ ] Generate its App Server schemas and document protocol compatibility.
@@ -17,8 +17,12 @@
 - [ ] Exercise one harmless repository task and an evidence-based review/fix turn.
 - [x] Test disconnect, process failure, stale state, and permission blockers against protocol fixtures.
 - [ ] Repeat compatibility/failure checks against the installed Codex build on the VM.
+- [x] Claude headless-CLI adapter with the same session, event, and blocker handling (fixture-tested).
+- [x] Real `claude` 2.1.296 accepts the read-only flag set and stream shape (unsigned probe only).
+- [ ] Sign the Claude CLI in on the host and run `npm run claude:smoke` once.
+- [ ] Run one mixed pairing (`npm run smoke -- codex:claude`).
 
-Exit: one real task and follow-up run through the adapter without desktop clicks.
+Exit: one real task and follow-up run through each adapter without desktop clicks.
 
 ## M2 — Durable unattended service
 
@@ -36,19 +40,22 @@ Exit: one real task and follow-up run through the adapter without desktop clicks
 - [ ] Approval inbox and explicit ownership when a human takes over.
 - [ ] Verify that closing all viewers does not stop work.
 
-## M4 — Claude and richer delegation
+## M4 — Richer delegation
 
-- [ ] Confirm Claude authentication/billing and implement its adapter.
+- [ ] Confirm which Claude account pays for unattended runs (subscription or API key).
+- [x] Cross-provider review with shared prompts (fixture-tested; `smoke.js` pairings).
 - [ ] Cross-provider review using shared artifacts and explicit task context.
 - [ ] Separate worktrees for concurrent tasks and controlled integration.
 - [ ] Bounded research/ideation tasks with recorded decision evidence.
 
 ## Handoff
 
-Finish M1 using docs/CODEX_SETUP.md. Do not build the full dashboard before proving
-live session control. The adapter implements a documented protocol subset, but no
-Codex executable is installed in the development workspace. It has not connected
-to the owner's VM, accessed existing chats, or executed a live coding agent.
-Run `npm test` (28 tests) and `npm run demo` for the offline baseline. The live smoke
-command is separate and can consume provider usage. Its version pin is an operator
-check, not a declaration that a specific Codex release has been certified.
+Finish M1 using docs/CODEX_SETUP.md and docs/CLAUDE_SETUP.md. Do not build the full
+dashboard before proving live session control. Both adapters implement documented
+protocol subsets. No Codex executable is installed in the development workspace.
+The Claude CLI is installed there but not signed in, so only flag parsing and the
+unsigned stream shape have been checked live. Neither adapter has connected to the
+owner's VM, accessed existing chats, or executed a live coding agent.
+Run `npm test` (50 tests) and `npm run demo` for the offline baseline. The live smoke
+commands are separate and can consume provider usage. Their version pins are operator
+checks, not declarations that a specific release has been certified.

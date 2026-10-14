@@ -1,17 +1,6 @@
 import { BlockedError } from '../supervisor.js';
 import { RpcClient } from './rpc-client.js';
 
-export const workerSchema = {
-  type: 'object', additionalProperties: false,
-  properties: { summary: { type: 'string' }, evidence: { type: 'array', items: { type: 'string' } } },
-  required: ['summary', 'evidence']
-};
-export const reviewSchema = {
-  type: 'object', additionalProperties: false,
-  properties: { passed: { type: 'boolean' }, reason: { type: 'string' } },
-  required: ['passed', 'reason']
-};
-
 export class CodexSession {
   constructor({ cwd, model, timeoutMs = 300_000, createClient = () => new RpcClient({ cwd }) }) {
     if (!cwd) throw new Error('A project directory is required.');
@@ -32,7 +21,7 @@ export class CodexSession {
     };
     client.on('serverRequest', blockOnRequest);
     try {
-      await client.request('initialize', { clientInfo: { name: 'nightshift', title: 'Nightshift', version: '0.2.0' } });
+      await client.request('initialize', { clientInfo: { name: 'nightshift', title: 'Nightshift', version: '0.3.0' } });
       client.notify('initialized');
       // Both new and resumed sessions stay read-only in this compatibility milestone.
       const params = { cwd: this.cwd, sandbox: 'readOnly', approvalPolicy: 'unlessTrusted',

@@ -73,6 +73,28 @@ The documentation-shaped fixture covers integration plumbing, not authentication
 provider execution, sandbox effectiveness, or compatibility with an installed binary.
 The VM smoke command requires an exact version string and existing authentication.
 
+## Initial Claude adapter
+
+The Claude adapter runs `claude -p --output-format stream-json` as a child process,
+one process per turn, with the prompt on stdin. It uses the CLI rather than the Agent
+SDK so that Nightshift keeps zero npm dependencies and mirrors the Codex child-process
+model. Nightshift chooses the session ID (`--session-id`) and persists it before the
+process starts, then resumes with `--resume`; the init message must echo that ID.
+Messages from any other session are ignored. The CLI has no separate turn ID, so the
+init message `uuid` stands in for it.
+
+Read-only enforcement is by tool surface, not prompt alone: only Read, Grep, and Glob
+exist, nothing can prompt (`dontAsk`, `--permission-prompts none`), `--restricted`
+confines file tools to the repository and skips settings-file hooks, and no MCP
+servers load. Denied tool requests in the final result become `approval-required`
+events and block the task. The result's cost, turn count, and usage are recorded as
+a `usage` event; `apiKeySource` from the init message records which sign-in paid.
+
+Both adapters share `src/prompts.js` and `src/adapters/agent.js`, so worker and reviewer
+instructions are identical across providers. Any provider can review another's work.
+A saved session is never resumed by a different provider. See `docs/CLAUDE_SETUP.md`
+for what has been checked against an installed CLI.
+
 ## Expanded live adapter contract (next milestone)
 
 Adapters should expose start/resume/send/interrupt and an async event stream.
@@ -85,8 +107,10 @@ Codex candidate: App Server using a local stdio child process. Keep the experime
 protocol behind a version-pinned adapter; generate schemas from that installed
 version. Do not expose the raw provider server to the network.
 
-Claude candidate: Claude Agent SDK. Confirm supported authentication and billing
-before integration; do not assume a consumer subscription pays for SDK usage.
+Claude: headless CLI (above), version-pinned like Codex. The Agent SDK remains an
+option if the streaming-input mode or in-process permission callbacks are needed for
+the approval inbox. Confirm which account pays (subscription limits versus API key)
+before unattended runs.
 
 ## Service and remote interface (later milestone)
 

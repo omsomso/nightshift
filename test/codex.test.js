@@ -96,13 +96,13 @@ function smokeFixture(t) {
   const command = join(directory, 'codex-fixture');
   writeFileSync(command, `#!/usr/bin/env node\nif (process.argv[2] === '--version') console.log('codex-fixture 1'); else { process.argv[2] = 'normal'; import(${JSON.stringify(pathToFileURL(fixtureFile).href)}); }\n`, { mode: 0o700 });
   return { directory, stateDirectory: join(directory, 'state'),
-    script: fileURLToPath(new URL('../src/codex-smoke.js', import.meta.url)),
+    script: fileURLToPath(new URL('../src/smoke.js', import.meta.url)),
     env: { ...process.env, NIGHTSHIFT_CODEX_BIN: command, NIGHTSHIFT_CODEX_VERSION: 'codex-fixture 1' } };
 }
 
 test('VM smoke command runs end-to-end against a fixture and is idempotent', t => {
   const f = smokeFixture(t);
-  const run = () => execFileSync(process.execPath, [f.script, process.cwd(), f.stateDirectory], { env: f.env, encoding: 'utf8', timeout: 10_000 });
+  const run = () => execFileSync(process.execPath, [f.script, 'codex', process.cwd(), f.stateDirectory], { env: f.env, encoding: 'utf8', timeout: 10_000 });
   run();
   const first = JSON.parse(readFileSync(join(f.stateDirectory, 'state.json'), 'utf8'));
   assert.equal(first.tasks[0].status, 'done');
@@ -115,10 +115,10 @@ test('VM smoke command runs end-to-end against a fixture and is idempotent', t =
 
 test('VM smoke command refuses an unpinned runtime before creating state', t => {
   const f = smokeFixture(t);
-  const result = spawnSync(process.execPath, [f.script, process.cwd(), f.stateDirectory], {
+  const result = spawnSync(process.execPath, [f.script, 'codex', process.cwd(), f.stateDirectory], {
     env: { ...f.env, NIGHTSHIFT_CODEX_VERSION: 'different version' }, encoding: 'utf8', timeout: 10_000
   });
   assert.equal(result.status, 1);
-  assert.match(result.stderr, /version mismatch/);
+  assert.match(result.stderr, /codex version mismatch/);
   assert.equal(existsSync(f.stateDirectory), false);
 });
