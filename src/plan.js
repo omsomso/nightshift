@@ -15,6 +15,9 @@ export const defaultLimits = {
 // No task may change these, whatever the plan's allowed paths say.
 export const protectedPaths = ['.git', '.github/', '.claude/', '.codex/', '.nightshift/', 'AGENTS.md', 'CLAUDE.md'];
 
+// Checks run in the plan's worktree and must never change its history.
+const historyCommand = /\bgit\s+(push|commit|reset|rebase)\b/;
+
 const idPattern = /^[a-z0-9][a-z0-9-]{0,62}$/;
 
 // An owner-approved plan: a brief, ordered tasks, the checks Nightshift runs, and limits.
@@ -32,6 +35,8 @@ export function validatePlan(plan, baseDir, label = 'plan') {
   if (!Array.isArray(plan.checks) || !plan.checks.length || plan.checks.some(c => typeof c !== 'string' || !c.trim())) {
     fail('checks must list at least one command; Nightshift runs them itself after every task.');
   }
+  const historyCheck = plan.checks.find(c => historyCommand.test(c));
+  if (historyCheck) fail(`check "${historyCheck}" changes Git history (git push, commit, reset, or rebase); checks must only inspect.`);
   if (!Array.isArray(plan.tasks) || !plan.tasks.length) fail('tasks must list at least one task.');
   const ids = new Set();
   for (const task of plan.tasks) {
