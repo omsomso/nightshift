@@ -7,7 +7,7 @@ Like Codex, it does not implement unattended editing, remote access, or a daemon
 
 ## Before running
 
-1. Install Node.js 22 or newer and the Claude Code CLI on the machine that runs Nightshift.
+1. Install Node.js 22.13 or newer and the Claude Code CLI on the machine that runs Nightshift.
 2. Sign the CLI in: `claude auth login` (subscription) or set `ANTHROPIC_API_KEY`
    (pay-per-token API billing). `claude auth status` shows which one is active.
    The desktop app's sign-in does not carry over to the CLI.

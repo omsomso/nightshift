@@ -5,7 +5,7 @@
   "type": "module",
   "description": "A local-first supervisor for unattended coding agents",
   "engines": {
-    "node": ">=22"
+    "node": ">=22.13"
   },
   "scripts": {
     "test": "node --test",
