@@ -164,3 +164,22 @@ test('the plan section of the report lists every task with attempts and latest c
   assert.match(report, /\(`b`\) — ready; 1 attempt\(s\); checks failed\n/);
   assert.match(report, /\(`c`\) — ready; 0 attempt\(s\); no checks yet\n/);
 });
+
+test('report --plan --json prints the same summary as that plan in list --json', t => {
+  const e = setupEnv(t);
+  e.startedPlan('alpha');
+  e.draft('beta');
+  const listed = JSON.parse(e.cli('list', '--json')).plans;
+  for (const id of ['alpha', 'beta']) {
+    const one = JSON.parse(e.cli('report', '--plan', id, '--json'));
+    const entry = listed.find(p => p.id === id);
+    assert.deepEqual(Object.keys(one), Object.keys(entry));
+    assert.deepEqual({ ...one, limits: undefined }, { ...entry, limits: undefined }, 'only elapsed hours may differ');
+  }
+  assert.equal(JSON.parse(e.cli('report', '--plan', 'alpha', '--json')).status, 'running');
+  const unknown = e.run('report', '--plan', 'missing', '--json');
+  assert.equal(unknown.status, 1);
+  assert.match(unknown.stderr, /No plan or draft named missing/);
+  assert.match(e.run('report', '--json').stderr, /requires --plan/);
+  assert.match(e.cli('report', '--plan', 'alpha'), /^# Nightshift report/, 'without --json the Markdown report is unchanged');
+});

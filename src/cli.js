@@ -41,6 +41,7 @@ const usage = `Usage: node src/cli.js <command> [options]
   retry <task-id|plan-id>      Requeue a blocked task (or reopen a blocked plan) after you have reconciled it
   limit <name> <value>         Change a plan limit, for example after one was reached
   report [--since ISO]         Markdown summary of results, blockers, and usage
+  report --plan <id> --json    One plan's summary as JSON (the same shape as an entry of \`list --json\`)
 
 Plan commands take --plan <id> (state in ~/.nightshift/plans/<id>); others accept --state <dir> (default .nightshift).`;
 
@@ -286,7 +287,13 @@ const commands = {
     console.log(`Merged ${merged.branch} into ${merged.target} as ${merged.merged.slice(0, 12)}. The worktree was removed; the branch is kept.`);
   },
   status: () => console.log(JSON.stringify(Store.inspect(directory), null, 2)),
-  report: () => process.stdout.write(renderReport(Store.inspect(directory), { since: values.since })),
+  report: () => {
+    if (!values.json) return process.stdout.write(renderReport(Store.inspect(directory), { since: values.since }));
+    if (!values.plan) throw new Error('report --json requires --plan <id>.');
+    const summary = summarize(values.plan);
+    if (!summary) throw new Error(`No plan or draft named ${values.plan}.`);
+    console.log(JSON.stringify(summary));
+  },
   pause: () => enqueue('pause'),
   resume: () => enqueue('resume'),
   interrupt: () => enqueue('interrupt'),
