@@ -20,7 +20,8 @@ const usage = `Usage: node src/cli.js <command> [options]
 
   setup                        Record the installed Claude/Codex versions and check sign-ins
   run <doc> [--steps s]        Draft a plan from a document, ask once, then run it in the background
-        [--repo path] [--agents claude:codex] [--request text] [--yes]
+        [--repo path] [--agents claude:codex] [--request text] [--base ref] [--yes]
+                               --base: start the plan's worktree from this commit instead of HEAD
   draft <doc> [same options]   Only draft the plan (review it, then \`start <id>\`)
   start <id> | stop <id>       Start or stop a plan's background runner
   list [--json]                All plans in ~/.nightshift/plans with progress
@@ -49,7 +50,7 @@ const { values, positionals } = parseArgs({ allowPositionals: true, options: {
   id: { type: 'string' }, title: { type: 'string' }, acceptance: { type: 'string' }, after: { type: 'string' },
   'max-attempts': { type: 'string', default: '2' }, since: { type: 'string' }, help: { type: 'boolean' },
   plan: { type: 'string' }, steps: { type: 'string' }, request: { type: 'string' }, yes: { type: 'boolean' }, json: { type: 'boolean' },
-  lines: { type: 'string', default: '40' }
+  lines: { type: 'string', default: '40' }, base: { type: 'string' }
 } });
 const [command = 'status', argument] = positionals;
 // demo and status also accept the state directory positionally, as in earlier versions.
@@ -193,7 +194,7 @@ function setup() {
 }
 
 function printDraft(id, { plan: draft, notes, agents }) {
-  console.log(`\nPlan ${id} for ${draft.repo} (${agents}):\n${draft.brief}\n`);
+  console.log(`\nPlan ${id} for ${draft.repo} (${agents}), starting from ${draft.base}:\n${draft.brief}\n`);
   draft.tasks.forEach((task, i) => console.log(`  ${i + 1}. ${task.title}\n     done when: ${task.acceptance}`));
   console.log(`\nChecks: ${draft.checks.join('; ')}\nAllowed paths: ${draft.allowedPaths.map(p => p || '(whole repository)').join(', ')}`);
   console.log(`Limits: ${draft.limits.attemptsPerTask} attempts per task, ${draft.limits.dispatches} dispatches, ` +
@@ -206,13 +207,19 @@ async function draft() {
   if (!argument) throw new Error('Give the document to plan from, for example: draft docs/ROADMAP.md');
   const doc = resolve(argument);
   const repo = execFileSync('git', ['-C', values.repo ? resolve(values.repo) : resolve(doc, '..'), 'rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim();
+  let base = 'HEAD';
+  if (values.base) {
+    try { execFileSync('git', ['-C', repo, 'rev-parse', '--verify', '--quiet', `${values.base}^{commit}`], { stdio: 'ignore' }); }
+    catch { throw new Error(`--base ${values.base} is not a commit in ${repo}.`); }
+    base = values.base;
+  }
   const agents = values.agents ?? readConfig().defaultAgents ?? 'claude:codex';
   const plannerName = agents.split(':')[0];
   const planner = buildPlanner(plannerName, repo);
   console.error(`Drafting with ${planner.describe}…`);
   const drafted = await draftPlan({ session: planner.session, repo, doc, steps: values.steps, request: values.request });
   const id = freePlanId(drafted.plan.id);
-  const record = { ...drafted, plan: { ...drafted.plan, id }, agents, draftedAt: new Date().toISOString() };
+  const record = { ...drafted, plan: { ...drafted.plan, id, base }, agents, draftedAt: new Date().toISOString() };
   const dir = saveDraft(id, record);
   if (values.json) console.log(JSON.stringify({ id, dir, draft: record }));
   else printDraft(id, record);
