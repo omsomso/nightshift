@@ -246,6 +246,7 @@ function list() {
     const done = p.tasks.filter(t => t.status === 'done').length;
     console.log(`${p.id.padEnd(28)} ${(p.status + (p.paused ? ' (paused)' : '')).padEnd(26)} ${done}/${p.tasks.length} tasks  ` +
       `${p.runner ? 'runner on ' : 'runner off'}  ${p.repo}`);
+    if (p.current) console.log(`  now: ${p.current.title}`);
     if (p.blocker) console.log(`  blocker: ${p.blocker.replace(/\s+/g, ' ').slice(0, 160)}`);
   }
 }
