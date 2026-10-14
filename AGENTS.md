@@ -17,4 +17,5 @@ Read README.md and docs/ROADMAP.md before implementing a milestone.
 - Do not add autonomous merge, deployment, purchase, or outbound messaging by default.
 - Prefer small, reviewable milestones. Run `npm test` for state-machine changes.
 - Update the roadmap and document what was verified and what remains untested.
-- No remote repository or application deployment is configured yet.
+- The remote is a private GitHub repository (omsomso/nightshift). Push only when the owner
+  asks; never force-push. No application deployment is configured.
