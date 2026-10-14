@@ -8,9 +8,9 @@ Like Codex, it does not implement unattended editing, remote access, or a daemon
 ## Before running
 
 1. Install Node.js 22.13 or newer and the Claude Code CLI on the machine that runs Nightshift.
-2. Sign the CLI in: `claude auth login` (subscription) or set `ANTHROPIC_API_KEY`
-   (pay-per-token API billing). `claude auth status` shows which one is active.
-   The desktop app's sign-in does not carry over to the CLI.
+2. Sign the CLI in with your claude.ai account: `claude auth login`. `claude auth status`
+   should report `claude.ai`. API keys are refused (see Billing below). The desktop
+   app's sign-in does not carry over to the CLI.
 3. Choose a non-sensitive test repository first.
 4. Run `npm test`. These tests use a stand-in CLI and do not contact Anthropic.
 5. Check the installed version: `claude --version`.
@@ -79,12 +79,40 @@ sign-in, model `claude-opus-5-5`):
 Still unverified: resume of a saved session (needs a review failure and repair turn),
 the `--max-budget-usd` cap being hit, a denial on a real run, and timeout behavior.
 
-## Billing
+## Billing: subscription only
 
-The CLI uses whatever it is signed in with. A subscription sign-in draws on that
-plan's usage limits; an API key is billed per token, and `--max-budget-usd` caps each
-turn. The development Mac is signed in with a claude.ai Max plan. Decide which account
-Nightshift should use before unattended runs.
+Nightshift runs Claude only on a claude.ai subscription sign-in (Pro, Max, Team, or
+Enterprise). In headless mode an `ANTHROPIC_API_KEY` would silently outrank that
+sign-in, so three guards stop pay-per-token billing:
+
+1. **Stripped environment.** Every `ANTHROPIC_*` variable (API key, auth token, base
+   URL, profile, federation) and every `CLAUDE_CODE_USE_*` cloud-provider switch is
+   removed before `claude` starts, for both turns and the startup check.
+2. **Startup check.** `smoke` and `serve` run `claude auth status` with that same
+   environment and refuse to start unless it reports `authMethod: "claude.ai"`.
+3. **Per-turn check.** If a turn's init message reports any `apiKeySource` other than
+   `"none"` (for example an `apiKeyHelper` from managed settings), the process is killed
+   at once, the task is blocked, and the whole queue pauses with a `billing-guard` event.
+
+There is deliberately no setting to turn these off. Changing that requires a code
+change, so an agent cannot enable API billing by editing configuration.
+`--restricted` also keeps user, project, and local settings files (where an
+`apiKeyHelper` could live) out of each turn.
+
+Verified 2026-10-14: the startup check reads `claude.ai max` on the development Mac,
+and a real turn with the stripped environment completed with `apiKeySource: "none"`.
+Not verified: whether the init message always arrives before the first model request.
+Guard 3 is a backstop; guards 1 and 2 are the main protection.
+
+Outside Nightshift, set these on your account; no agent run by Nightshift can change them:
+
+- claude.ai → Settings → Usage → **Usage credits**: leave off, or set a monthly limit.
+  Without credits, reaching the plan limit pauses work instead of charging.
+- If you have a Claude Console (API) account, set a spend limit there or keep no keys.
+
+Unattended runs share the plan's usage limits with your interactive use. A run that
+hits the limit fails and blocks its task. `--max-budget-usd` (default 2) stays as a
+per-turn cap in case the guards are ever bypassed.
 
 ## Recovery
 

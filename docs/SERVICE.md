@@ -81,8 +81,10 @@ for the current turn instead of killing it. A killed turn is blocked on restart.
 
 For `--agents codex`, `claude`, or a pairing, add `--repo /path` and the matching
 `NIGHTSHIFT_*_VERSION` (and optional `NIGHTSHIFT_*_BIN`) variables to the unit's
-environment. The service account must already be signed in to that CLI. The
-adapters are still read-only inspections; see the setup docs for each provider.
+environment. The service account must already be signed in to that CLI. Claude
+requires a claude.ai subscription sign-in; `ANTHROPIC_*` variables in the unit are
+removed before each turn and never used. The adapters are still read-only
+inspections; see the setup docs for each provider.
 
 ## Daily use
 

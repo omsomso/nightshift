@@ -1,4 +1,6 @@
 export class BlockedError extends Error {}
+// Affects every task, not just this one: blocks the task and pauses the whole queue.
+export class BillingGuardError extends BlockedError {}
 
 export class Supervisor {
   constructor(store, adapter, reviewer) {
@@ -152,6 +154,10 @@ export class Supervisor {
     task.status = 'blocked';
     task.reason = error instanceof BlockedError ? error.message : `Execution uncertain: ${error.message ?? String(error)}`;
     this.record(task.id, 'blocked', task.reason);
+    if (error instanceof BillingGuardError) {
+      this.record(null, 'billing-guard', 'Queue paused: fix the sign-in, then retry the task and resume.');
+      this.state.paused = true;
+    }
     this.store.save(this.state);
   }
 

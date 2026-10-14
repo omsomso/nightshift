@@ -1,7 +1,15 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { BlockedError } from '../supervisor.js';
+import { BlockedError, BillingGuardError } from '../supervisor.js';
 import { JsonlDecoder } from '../jsonl.js';
+
+// Subscription-only billing. Every ANTHROPIC_* variable (API key, auth token, base URL,
+// profile, federation) and every cloud-provider switch can outrank a claude.ai sign-in,
+// so none of them reach the CLI. There is deliberately no opt-out setting.
+export function subscriptionEnv(env = process.env) {
+  return Object.fromEntries(Object.entries(env).filter(([name]) =>
+    !name.startsWith('ANTHROPIC_') && !name.startsWith('CLAUDE_CODE_USE_')));
+}
 
 // Read-only surface for this milestone: only file-reading tools exist, nothing can prompt,
 // MCP servers and settings-file hooks are not loaded, and file tools stay inside cwd.
@@ -35,7 +43,7 @@ export class ClaudeSession {
 
     const child = spawn(this.command, [...this.baseArgs,
       ...claudeArgs({ sessionId, resume, outputSchema, model: this.model, maxBudgetUsd: this.maxBudgetUsd })],
-      { cwd: this.cwd, stdio: ['pipe', 'pipe', 'pipe'], shell: false });
+      { cwd: this.cwd, env: subscriptionEnv(), stdio: ['pipe', 'pipe', 'pipe'], shell: false });
     const closed = new Promise(resolve => child.once('close', resolve));
     const lines = new JsonlDecoder({ label: 'Claude stream', maxLineBytes: this.maxLineBytes });
     const turn = { sessionId, emit, turnId: null, finished: false };
@@ -80,6 +88,12 @@ export class ClaudeSession {
     const { sessionId, emit } = turn;
     if (message.type === 'system' && message.subtype === 'init') {
       if (message.session_id !== sessionId) throw new Error('Claude returned a different session ID; reconcile before retrying.');
+      // "none" is what a claude.ai sign-in reports. Anything else (or a missing field)
+      // means an API key or helper would pay; the process is killed as soon as this throws.
+      if (message.apiKeySource !== 'none') {
+        throw new BillingGuardError(`Claude reported API-key billing (${message.apiKeySource ?? 'unknown source'}); ` +
+          'Nightshift only runs on a claude.ai subscription sign-in.');
+      }
       turn.turnId = message.uuid ?? null;
       emit({ type: 'turn-started', threadId: sessionId, turnId: turn.turnId, model: message.model,
         permissionMode: message.permissionMode, authSource: message.apiKeySource });
