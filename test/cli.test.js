@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, existsSync, readFileSync } from 'node:fs';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { tmpdir, hostname } from 'node:os';
 import { DatabaseSync } from 'node:sqlite';
@@ -182,4 +182,14 @@ test('report --plan --json prints the same summary as that plan in list --json',
   assert.match(unknown.stderr, /No plan or draft named missing/);
   assert.match(e.run('report', '--json').stderr, /requires --plan/);
   assert.match(e.cli('report', '--plan', 'alpha'), /^# Nightshift report/, 'without --json the Markdown report is unchanged');
+});
+
+test('the README command overview and --help describe the new commands', () => {
+  const readme = readFileSync(fileURLToPath(new URL('../README.md', import.meta.url)), 'utf8');
+  const overview = readme.slice(readme.indexOf('Commands for plans'), readme.indexOf('## Try it offline'));
+  for (const pattern of [/cli\.js logs <id>/, /cli\.js discard <id> --yes/, /--base/, /report --plan <id> --json/]) {
+    assert.match(overview, pattern);
+  }
+  const help = spawnSync(process.execPath, [cliFile, '--help'], { encoding: 'utf8' }).stderr;
+  for (const pattern of [/logs <id>/, /discard <id> --yes/, /--base ref/, /report --plan <id> --json/]) assert.match(help, pattern);
 });
