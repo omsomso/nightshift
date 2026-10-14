@@ -101,7 +101,12 @@ not auto-approve it. Start with a minimal tool configuration.
 - The App Server streamed output as `item/agentMessage/delta` and finished with
   `item/completed` (agentMessage) and `turn/completed`, as the adapter expects.
 
-Not yet verified: resume of a saved thread, turn interrupt, timeout behavior, and token
+Repair loop, verified live 2026-10-14 (`npm run repair:check -- codex <repo>` harness,
+first review replaced by a labelled forced failure with one extra requirement): attempt 2
+resumed the same saved worker thread, addressed the requirement, and the reviewer resumed
+its own thread and passed it.
+
+Not yet verified: turn interrupt, timeout behavior, and token
 usage (Codex reports it through `thread/tokenUsage/updated`, which is not recorded yet).
 A sandboxed agent shell may block OpenAI's servers (`workspace routing discovery timed
 out`); run live checks from a normal terminal.

@@ -71,6 +71,7 @@ read-only inspections; workspace writes come later.
 - `src/claude/`: headless `claude -p` session, read-only flags, and stream events.
 - `src/jsonl.js`: line framing shared by both transports.
 - `src/smoke.js`: version-checked, read-only compatibility run for any provider pairing.
+- `src/repair-check.js`: live check that a failed review resumes both saved sessions (`npm run repair:check`).
 - `docs/CODEX_SETUP.md`, `docs/CLAUDE_SETUP.md`: setup, verified behavior, and recovery notes.
 - `docs/SERVICE.md`: running `serve` under launchd (macOS) or systemd (Linux).
 - `test/supervisor.test.js`: behavioral checks for unattended execution.
