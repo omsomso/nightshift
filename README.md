@@ -15,9 +15,9 @@ Codex and Claude desktop chats. Nightshift will own programmatic agent sessions,
 give them a persistent project queue, verify results, and expose a remote-friendly
 chat interface. Closing the interface must not stop the supervisor.
 
-## Run the first milestone
+## Try it
 
-Requires Node.js 22 or newer. No dependency installation is needed.
+Requires Node.js 22.13 or newer (for built-in SQLite). No dependency installation is needed.
 
 ```sh
 npm test
@@ -25,19 +25,33 @@ npm run demo
 npm run status
 ```
 
-The demo seeds two tasks in `.nightshift/state.json`, executes them with a simulated
+The demo seeds two tasks in `.nightshift/nightshift.db`, executes them with a simulated
 adapter and reviewer, and prints their saved status. Repeating it does not duplicate
-completed tasks. To create a separate demo state:
+completed tasks. `node src/cli.js demo ./another-demo` uses a separate state directory.
+
+## Run it as a service
+
+`serve` keeps running: it dispatches ready tasks, then waits for more. Other commands
+talk to it through the state database, so they work from another terminal while it runs.
 
 ```sh
-node src/cli.js demo ./another-demo
+node src/cli.js serve --agents simulated            # or claude, codex, codex:claude --repo /path
+node src/cli.js add --id docs --title "Document setup" --acceptance "README lists the steps."
+node src/cli.js pause                                # stops new dispatch at the next boundary
+node src/cli.js resume
+node src/cli.js retry <task-id>                      # requeue a blocked task you have reconciled
+node src/cli.js report --since 2026-10-14T00:00Z     # Markdown morning report
 ```
 
-The core already supports dependency ordering, persisted attempt limits, independent
-review before completion, continuing past blocked tasks, and conservative recovery
-of interrupted work. Each runner exclusively locks its state directory. State writes
-use temporary files and atomic rename. This is a single-process bootstrap, not a
-production database or a live-agent daemon.
+`serve` pauses itself after `--max-dispatches` (default 20) and stays paused across
+restarts until you resume. Ctrl-C or SIGTERM stops after the current step. See
+`docs/SERVICE.md` for starting it automatically at boot.
+
+The core supports dependency ordering, persisted attempt limits, independent review
+before completion, continuing past blocked tasks, and conservative recovery of
+interrupted work. State lives in SQLite with an append-only event log. One runner
+holds an expiring lease, and every write checks it. Live provider runs are still
+read-only inspections; workspace writes come later.
 
 ## Project map
 
@@ -45,7 +59,10 @@ production database or a live-agent daemon.
 - `docs/ARCHITECTURE.md`: session ownership, adapters, remote access, and persistence.
 - `docs/ROADMAP.md`: ordered implementation backlog and next-agent handoff.
 - `src/supervisor.js`: queue and verification state machine.
-- `src/store.js`: local state and exclusive runner lock.
+- `src/store.js`: SQLite state, append-only events, runner lease, and command queue.
+- `src/cli.js`: demo, status, serve, add, pause, resume, retry, and report commands.
+- `src/report.js`: morning report rendering.
+- `src/providers.js`: version-checked provider setup shared by `serve` and `smoke`.
 - `src/prompts.js`: provider-neutral worker/reviewer prompts and result schemas.
 - `src/adapters/`: simulated, Codex, and Claude workers and reviewers (`agent.js` is shared).
 - `src/codex/`: App Server JSONL transport, session management, and turn events.
@@ -53,7 +70,9 @@ production database or a live-agent daemon.
 - `src/jsonl.js`: line framing shared by both transports.
 - `src/smoke.js`: version-checked, read-only compatibility run for any provider pairing.
 - `docs/CODEX_SETUP.md`, `docs/CLAUDE_SETUP.md`: setup, verified behavior, and recovery notes.
+- `docs/SERVICE.md`: running `serve` under launchd (macOS) or systemd (Linux).
 - `test/supervisor.test.js`: behavioral checks for unattended execution.
+- `test/service.test.js`: store, lease, command, serve-loop, and report tests.
 - `test/codex.test.js`, `test/claude.test.js`: subprocess protocol and persisted session tests.
 
 ## Next milestone
@@ -62,8 +81,8 @@ Run the live compatibility checks on the machine that will host Nightshift:
 `npm run codex:smoke` (see `docs/CODEX_SETUP.md`), `npm run claude:smoke` (see
 `docs/CLAUDE_SETUP.md`), and one mixed pairing such as `npm run smoke -- codex:claude`.
 Resolve any protocol mismatch they reveal. Both adapters are read-only for now.
-Workspace writes, daemon management, and the authenticated responsive UI come after
-this checkpoint.
+Live interrupt, workspace writes, and the authenticated responsive UI come after this
+checkpoint.
 
 ## Git and remote setup
 

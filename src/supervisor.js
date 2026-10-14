@@ -39,6 +39,35 @@ export class Supervisor {
     this.store.save(this.state);
   }
 
+  // Manual only: a person has reconciled the blocker and accepts any repeated effects.
+  retry(id) {
+    const task = this.state.tasks.find(candidate => candidate.id === id);
+    if (!task) throw new Error(`Unknown task ${id}.`);
+    if (task.status !== 'blocked') throw new Error(`Task ${id} is ${task.status}, not blocked.`);
+    task.status = 'ready';
+    task.maxAttempts = Math.max(task.maxAttempts, task.attempts + 1);
+    this.record(id, 'manual-retry', `Previous blocker: ${task.reason}`);
+    delete task.reason;
+    this.store.save(this.state);
+  }
+
+  // Commands queued by other processes apply only between dispatches.
+  applyCommands() {
+    if (!this.store.takeCommands) return;
+    for (const command of this.store.takeCommands()) {
+      try {
+        if (command.type === 'pause') this.pause(true);
+        else if (command.type === 'resume') this.pause(false);
+        else if (command.type === 'add-task') this.add(command.payload);
+        else if (command.type === 'retry') this.retry(command.payload?.id);
+        else throw new Error('Unknown command.');
+      } catch (error) {
+        this.record(command.payload?.id ?? null, 'command-rejected', `${command.type}: ${error.message}`);
+        this.store.save(this.state);
+      }
+    }
+  }
+
   snapshot() { return structuredClone(this.state); }
 
   observer(task, role) {
@@ -64,7 +93,9 @@ export class Supervisor {
   }
 
   async tick() {
-    if (this.busy || this.state.paused) return false;
+    if (this.busy) return false;
+    this.applyCommands();
+    if (this.state.paused) return false;
     const task = this.state.tasks.find(candidate => candidate.status === 'ready' &&
       candidate.dependencies.every(id => this.state.tasks.some(other => other.id === id && other.status === 'done')));
     if (!task) return false;

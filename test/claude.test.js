@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -126,12 +126,12 @@ for (const pairing of ['claude', 'codex:claude', 'claude:codex']) {
     const f = smokeFixture(t);
     const run = () => execFileSync(process.execPath, [smokeScript, pairing, process.cwd(), f.stateDirectory], { env: f.env, encoding: 'utf8', timeout: 10_000 });
     run();
-    const first = JSON.parse(readFileSync(join(f.stateDirectory, 'state.json'), 'utf8'));
+    const first = Store.inspect(f.stateDirectory);
     assert.equal(first.tasks[0].status, 'done');
     assert.equal(first.project.claudeVersion, 'claude-fixture 1');
     assert.equal(first.project.pairing, pairing.includes(':') ? pairing : `${pairing}:${pairing}`);
     run();
-    const second = JSON.parse(readFileSync(join(f.stateDirectory, 'state.json'), 'utf8'));
+    const second = Store.inspect(f.stateDirectory);
     assert.equal(second.tasks[0].attempts, 1);
     assert.equal(second.events.length, first.events.length);
   });

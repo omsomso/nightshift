@@ -3,7 +3,7 @@
 ## M0 — Repository and controller foundation
 
 - [x] Project brief, architecture, and agent instructions.
-- [x] Persistent task state with a single-runner lock.
+- [x] Persistent task state with a single-runner lock (now a SQLite lease, M2).
 - [x] Dependency selection, bounded repair attempts, and blocked-task skipping.
 - [x] Separate review step and conservative interrupted-run recovery.
 - [x] Simulated end-to-end demo and behavioral tests.
@@ -26,11 +26,15 @@ Exit: one real task and follow-up run through each adapter without desktop click
 
 ## M2 — Durable unattended service
 
-- [ ] SQLite migrations and append-only event log.
-- [ ] Dispatch leases and provider reconciliation after restart.
-- [ ] Resource caps, timeouts, bounded retries, and stagnation detection.
-- [ ] Pause, interrupt, manual takeover, and controlled resume.
-- [ ] OS-managed startup and a morning report.
+- [x] SQLite migrations and append-only event log (built-in `node:sqlite`; JSON import).
+- [x] Runner lease with heartbeat, write fencing, and safe takeover from an exited runner.
+- [ ] Provider reconciliation after restart (inspect a saved thread before retrying).
+- [x] Dispatch cap that persists as a pause; per-turn timeouts; bounded attempts.
+- [ ] Token/spend caps across a night and stagnation detection.
+- [x] Pause, resume, and manual retry from other processes via a command queue.
+- [ ] Live interrupt of a running turn and explicit manual takeover.
+- [x] Long-running `serve` loop with clean shutdown; launchd/systemd examples (not installed).
+- [x] Markdown morning report (`report --since`).
 
 ## M3 — Remote workspace
 
@@ -56,6 +60,6 @@ protocol subsets. No Codex executable is installed in the development workspace.
 The Claude CLI is installed there but not signed in, so only flag parsing and the
 unsigned stream shape have been checked live. Neither adapter has connected to the
 owner's VM, accessed existing chats, or executed a live coding agent.
-Run `npm test` (50 tests) and `npm run demo` for the offline baseline. The live smoke
+Run `npm test` (59 tests) and `npm run demo` for the offline baseline. The live smoke
 commands are separate and can consume provider usage. Their version pins are operator
 checks, not declarations that a specific release has been certified.

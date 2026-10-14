@@ -43,16 +43,34 @@ Tasks move through `ready -> running -> review -> done`, with review failures
 returning to `ready` until their attempt limit. Explicit blockers, adapter errors,
 and exhausted attempts become `blocked`. Dependencies must be `done` before dispatch.
 
-The store uses JSON snapshots with fsync-before-rename and an exclusive directory
-lock. A process must acquire that lock before reading or writing state. A crash
-may leave the lock behind: verify the recorded PID is no longer running before
-manually removing `.nightshift/runner.lock`. Recovery changes `running` and `review`
-tasks to `blocked`, because their external effects cannot safely be replayed.
+## Store, lease, and service loop
 
-Limitations: one process, no multi-host support, no user-facing live cancellation,
-no provider reconciliation, no power-loss durability guarantee, no daemon or HTTP server.
-Pause currently applies at task boundaries within one supervisor instance. These
-limitations are explicit roadmap work, not completed features.
+State lives in `nightshift.db` (built-in `node:sqlite`, WAL, `synchronous=FULL`),
+with numbered migrations tracked in `PRAGMA user_version`. Tables: `meta` (paused,
+project), `tasks` (one JSON row per task plus its status), `events` (append-only,
+enforced by triggers that abort any UPDATE or DELETE), `lease`, and `commands`.
+Each `save()` runs in one transaction and inserts only events not yet persisted.
+A JSON `state.json` from 0.3 or earlier is imported once and renamed `.imported`.
+
+The dispatching process holds a single-row lease with an expiry, refreshed by a
+heartbeat. Every write first checks that this process still owns the lease, so a
+stalled runner that lost it cannot overwrite a successor. A new runner takes over
+only when the previous holder is on this host and its PID is gone; a live or
+foreign-host holder is refused even if expired, because a hung process may still
+act. Takeover records a `lease-recovered` event. Recovery then changes `running`
+and `review` tasks to `blocked`, because their external effects cannot safely be
+replayed. A person can requeue one with `retry` after reconciling it.
+
+Other processes never write task state. `status` and `report` open the database
+read-only; `add`, `pause`, `resume`, and `retry` append to `commands`, which the
+runner applies at the start of each tick, never during a turn. Invalid commands
+become `command-rejected` events. `serve` loops over ticks, sleeps when idle, stops
+cleanly on SIGINT/SIGTERM after the current step, and pauses itself (persistently)
+after a dispatch cap so an automatic restart cannot reset the cap.
+
+Limitations: one runner per state directory, no multi-host support, no live
+interrupt of a running turn, no provider reconciliation, no HTTP server, and the
+runner keeps the full event log in memory. These are roadmap work.
 
 ## Initial Codex adapter
 
@@ -114,9 +132,8 @@ before unattended runs.
 
 ## Service and remote interface (later milestone)
 
-Move snapshots to transactional SQLite with tasks, runs, approvals, sessions, and
-append-only events. Add a process supervisor appropriate for the VM operating
-system. Expose the app through an authenticated private connection. The UI talks
+Split the task JSON into runs, approvals, and sessions tables as the UI needs them.
+Install the service unit for the VM operating system (examples in `docs/SERVICE.md`). Expose the app through an authenticated private connection. The UI talks
 only to the backend; provider credentials remain local. Add explicit controls for
 pause queue, interrupt run, manual ownership, and resume automatic supervision.
 

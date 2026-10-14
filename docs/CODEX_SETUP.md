@@ -6,7 +6,7 @@ unattended code editing, remote UI access, or a background daemon yet.
 
 ## Before running
 
-1. Extract the repository on your always-on VM. Install Node.js 22 or newer.
+1. Extract the repository on your always-on VM. Install Node.js 22.13 or newer.
 2. Install Codex through its supported installation flow and sign in there.
 3. Choose a non-sensitive test repository first. Confirm its Codex configuration,
    tools, hooks, and permissions match what you want available to the agent.
@@ -57,7 +57,7 @@ not auto-approve it. Start with a minimal tool configuration.
 - A worker inspects the project and returns cited evidence.
 - A distinct reviewer conversation inspects that evidence against the repository.
 - The controller marks the task done, requests a bounded repair, or records a blocker.
-- `.nightshift/codex-smoke/state.json` (or `.nightshift/codex-claude-smoke/` for a mixed pairing) retains task status, thread/turn IDs, and events.
+- `.nightshift/codex-smoke/nightshift.db` (or `.nightshift/codex-claude-smoke/` for a mixed pairing) retains task status, thread/turn IDs, and events. Read it with `node src/cli.js report --state .nightshift/codex-smoke`.
 - A repeated command does not replay a completed or blocked task.
 
 Exit codes: `0` means all tasks passed review, `2` means some tasks remain incomplete,
@@ -69,11 +69,13 @@ running build/test commands: those are reported from project documentation.
 
 If the process is interrupted, do not delete its state and rerun blindly. Inspect
 the saved IDs and reconcile the provider thread first. Startup blocks in-flight work
-whose outcome is unknown. The backend does not yet provide a reconciliation UI.
+whose outcome is unknown. After reconciling, `node src/cli.js retry <task-id> --state <dir>`
+requeues it. The backend does not yet provide a reconciliation UI.
 
-If `runner.lock` remains, read its `owner.json`, verify that the owning process is
-no longer running, and only then remove that lock directory. Never remove a lock
-from an active runner. A stale PID may have been reused; verify the process identity.
+A lease left by a crashed runner is taken over automatically once its PID has exited.
+If the PID is still running (a hung runner, or a reused PID), the next runner refuses
+to start; verify that process and stop it yourself. A `runner.lock` directory from
+Nightshift 0.3 or earlier blocks startup until you confirm its process exited and remove it.
 
 An approval event is historical evidence, not a currently answerable inbox entry.
 The connection has closed; a future interaction must obtain a current request.

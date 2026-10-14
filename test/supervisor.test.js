@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Store } from '../src/store.js';
@@ -93,10 +93,14 @@ test('a second runner cannot acquire the same state', t => {
   assert.throws(() => new Store(directory).acquire(), /locked/);
 });
 
-test('invalid state is not silently discarded', t => {
-  const { store } = fixture(t);
-  writeFileSync(store.file, '{broken');
-  assert.throws(() => store.read(), SyntaxError);
+test('invalid legacy state is not silently discarded', t => {
+  const directory = mkdtempSync(join(tmpdir(), 'nightshift-test-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  writeFileSync(join(directory, 'state.json'), '{broken');
+  assert.throws(() => new Store(directory).acquire(), SyntaxError);
+  assert.equal(existsSync(join(directory, 'state.json')), true);
+  // The failed attempt released its lease: the retry fails the same way, not as locked.
+  assert.throws(() => new Store(directory).acquire(), SyntaxError);
 });
 
 test('dispatch cap bounds work even when more tasks are ready', async t => {
