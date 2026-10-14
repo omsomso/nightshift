@@ -6,7 +6,7 @@ import { Supervisor } from './supervisor.js';
 import { simulatedAdapter, simulatedReviewer } from './adapters/simulated.js';
 import { buildAgents, checkProject } from './providers.js';
 import { renderReport } from './report.js';
-import { loadPlan } from './plan.js';
+import { loadPlan, defaultLimits } from './plan.js';
 import { Workspace } from './workspace.js';
 import { execFileSync } from 'node:child_process';
 import { createInterface } from 'node:readline/promises';
@@ -286,6 +286,7 @@ const commands = {
   limit: () => {
     const value = positionals[2];
     if (!argument || !value) throw new Error('limit requires a name and a value, for example: limit tokens 8000000');
+    if (!(argument in defaultLimits)) throw new Error(`Unknown limit ${argument}. Valid limits: ${Object.keys(defaultLimits).join(', ')}.`);
     enqueue('limit', { name: argument, value: Number(value) });
   }
 };

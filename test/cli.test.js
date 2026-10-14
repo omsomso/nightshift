@@ -6,6 +6,7 @@ import { tmpdir, hostname } from 'node:os';
 import { DatabaseSync } from 'node:sqlite';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { Store } from '../src/store.js';
 
 const cliFile = fileURLToPath(new URL('../src/cli.js', import.meta.url));
 const git = (cwd, ...args) => execFileSync('git', ['-C', cwd, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', ...args],
@@ -114,4 +115,15 @@ test('discard refuses while the runner is alive and refuses merged plans', t => 
   assert.equal(kept.status, 1);
   assert.match(kept.stderr, /is merged/);
   assert.match(git(e.repo, 'branch', '--list', 'nightshift/shipped'), /nightshift\/shipped/);
+});
+
+test('limit rejects unknown names at once and queues known ones', t => {
+  const e = setupEnv(t);
+  const dir = e.startedPlan('limits');
+  const refused = e.run('limit', 'speed', '5', '--plan', 'limits');
+  assert.equal(refused.status, 1);
+  assert.match(refused.stderr, /Unknown limit speed\. Valid limits: attemptsPerTask, turnMinutes, dispatches, tokens, hours, changedLinesPerTask, checkMinutes/);
+  assert.equal(Store.inspect(dir).pendingCommands, 0, 'nothing was queued');
+  assert.match(e.cli('limit', 'tokens', '8000000', '--plan', 'limits'), /Queued limit/);
+  assert.equal(Store.inspect(dir).pendingCommands, 1);
 });
