@@ -62,16 +62,29 @@ as an `approval-required` event and blocks the task; nothing is approved automat
 - Without sign-in, the result is `subtype: "success"` with `is_error: true`; the adapter
   reports this as `Claude turn error: Not logged in`.
 
-Not yet verified: a signed-in run, the `structured_output` field on success (the adapter
-falls back to parsing the `result` text as JSON), resume of a saved session, the budget
-cap, and a reviewer reading the worker's evidence. The first live `claude:smoke` run
-answers these.
+First signed-in run (`claude:claude` on the Nightshift repository itself, claude.ai Max
+sign-in, model `claude-opus-5-5`):
+
+- Worker and reviewer ran as separate sessions; the task passed review on attempt 1.
+- Tools used: Read, Grep, Glob, and `StructuredOutput` (the CLI's `--json-schema`
+  tool) only. No permission was denied and nothing prompted.
+- The structured result arrived as a JSON object; the reviewer independently re-checked
+  the worker's cited files and noted which checks were not run.
+- Reported notional cost: about $0.23 (15 model turns) for the worker and $0.15
+  (10 turns) for the reviewer. On a subscription this counts against plan limits.
+- `apiKeySource` in the init message reads `"none"` under a subscription sign-in, so it
+  does not show who pays. `buildAgents` records `claude auth status` instead, keeping
+  only method and plan (for example `claude.ai max`) as `project.claudeAuth`.
+
+Still unverified: resume of a saved session (needs a review failure and repair turn),
+the `--max-budget-usd` cap being hit, a denial on a real run, and timeout behavior.
 
 ## Billing
 
 The CLI uses whatever it is signed in with. A subscription sign-in draws on that
 plan's usage limits; an API key is billed per token, and `--max-budget-usd` caps each
-turn. Decide which account Nightshift should use before unattended runs.
+turn. The development Mac is signed in with a claude.ai Max plan. Decide which account
+Nightshift should use before unattended runs.
 
 ## Recovery
 

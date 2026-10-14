@@ -19,7 +19,8 @@
 - [ ] Repeat compatibility/failure checks against the installed Codex build on the VM.
 - [x] Claude headless-CLI adapter with the same session, event, and blocker handling (fixture-tested).
 - [x] Real `claude` 2.1.296 accepts the read-only flag set and stream shape (unsigned probe only).
-- [ ] Sign the Claude CLI in on the host and run `npm run claude:smoke` once.
+- [x] Sign the Claude CLI in and run `npm run claude:smoke` once (2026-10-14, dev Mac, passed).
+- [ ] Exercise a Claude review failure and resumed repair turn on a real run.
 - [ ] Run one mixed pairing (`npm run smoke -- codex:claude`).
 
 Exit: one real task and follow-up run through each adapter without desktop clicks.
@@ -57,9 +58,9 @@ Exit: one real task and follow-up run through each adapter without desktop click
 Finish M1 using docs/CODEX_SETUP.md and docs/CLAUDE_SETUP.md. Do not build the full
 dashboard before proving live session control. Both adapters implement documented
 protocol subsets. No Codex executable is installed in the development workspace.
-The Claude CLI is installed there but not signed in, so only flag parsing and the
-unsigned stream shape have been checked live. Neither adapter has connected to the
-owner's VM, accessed existing chats, or executed a live coding agent.
+The Claude adapter completed one signed-in, read-only worker/reviewer run on the
+development Mac (see docs/CLAUDE_SETUP.md); it has not edited files. Neither adapter
+has run on the owner's VM or accessed existing chats.
 Run `npm test` (59 tests) and `npm run demo` for the offline baseline. The live smoke
 commands are separate and can consume provider usage. Their version pins are operator
 checks, not declarations that a specific release has been certified.

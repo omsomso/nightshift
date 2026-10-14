@@ -113,7 +113,7 @@ function smokeFixture(t) {
   const directory = mkdtempSync(join(tmpdir(), 'nightshift-smoke-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   const claude = join(directory, 'claude-fixture');
-  writeFileSync(claude, `#!/usr/bin/env node\nif (process.argv[2] === '--version') console.log('claude-fixture 1'); else { process.argv.splice(2, 0, 'normal'); import(${JSON.stringify(pathToFileURL(fixtureFile).href)}); }\n`, { mode: 0o700 });
+  writeFileSync(claude, `#!/usr/bin/env node\nif (process.argv[2] === '--version') console.log('claude-fixture 1'); else if (process.argv[2] === 'auth') console.log(JSON.stringify({ loggedIn: true, authMethod: 'fixture', subscriptionType: 'plan', email: 'private@example.com' })); else { process.argv.splice(2, 0, 'normal'); import(${JSON.stringify(pathToFileURL(fixtureFile).href)}); }\n`, { mode: 0o700 });
   const codex = join(directory, 'codex-fixture');
   writeFileSync(codex, `#!/usr/bin/env node\nif (process.argv[2] === '--version') console.log('codex-fixture 1'); else { process.argv[2] = 'normal'; import(${JSON.stringify(pathToFileURL(codexFixture).href)}); }\n`, { mode: 0o700 });
   return { stateDirectory: join(directory, 'state'),
@@ -129,6 +129,8 @@ for (const pairing of ['claude', 'codex:claude', 'claude:codex']) {
     const first = Store.inspect(f.stateDirectory);
     assert.equal(first.tasks[0].status, 'done');
     assert.equal(first.project.claudeVersion, 'claude-fixture 1');
+    assert.equal(first.project.claudeAuth, 'fixture plan');
+    assert.doesNotMatch(JSON.stringify(first), /private@example\.com/);
     assert.equal(first.project.pairing, pairing.includes(':') ? pairing : `${pairing}:${pairing}`);
     run();
     const second = Store.inspect(f.stateDirectory);
