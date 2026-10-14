@@ -11,7 +11,7 @@ export function renderReport(state, { since, now = new Date() } = {}) {
   const byStatus = status => tasks.filter(task => task.status === status);
   const providers = task => Object.entries(task.sessions ?? {}).map(([role, s]) => `${role}: ${s.provider}`).join(', ');
   const out = [`# Nightshift report`, '', `Generated ${now.toISOString()}${since ? `; activity since ${since}` : ''}.`];
-  if (state.project) out.push(`Project: \`${state.project.cwd ?? 'no repository'}\` (${state.project.pairing ?? 'codex:codex'}${state.project.claudeAuth ? `; Claude sign-in: ${state.project.claudeAuth}` : ''}).`);
+  if (state.project) out.push(`Project: \`${state.project.cwd ?? 'no repository'}\` (${state.project.pairing ?? 'codex:codex'}${state.project.claudeAuth ? `; Claude sign-in: ${state.project.claudeAuth}` : ''}${state.project.codexAuth ? `; Codex sign-in: ${state.project.codexAuth}` : ''}).`);
   if (state.paused) out.push('', '**The queue is paused.** Run `node src/cli.js resume` to continue.');
   if (state.pendingCommands) out.push('', `${state.pendingCommands} queued command(s) are waiting for a running \`serve\`.`);
 

@@ -18,9 +18,19 @@ codex --version
 codex app-server generate-json-schema --out .nightshift/codex-schema
 ```
 
-This implementation follows the documented App Server interface reviewed on
-2026-10-14. No actual Codex version has been certified in this development workspace.
 Keep the schema output and version together; compare fields before changing the pin.
+
+### Schema comparison: codex-cli 0.162.1 (2026-10-14, macOS, Homebrew cask)
+
+All methods Nightshift uses exist: `initialize`, `initialized`, `account/read`,
+`thread/start`, `thread/resume`, `turn/start`, `turn/interrupt`, and the notifications
+`item/agentMessage/delta`, `item/completed`, `turn/completed`, and `error`. Turn, item,
+thread-status, and error shapes match the adapter. Two values did not match and were fixed:
+
+| Field | Was sending | Schema expects |
+| --- | --- | --- |
+| `thread/start` / `thread/resume` `sandbox` | `readOnly` | `read-only` (turn-level `sandboxPolicy.type` stays `readOnly`) |
+| `approvalPolicy` | `unlessTrusted` | one of `untrusted`, `on-request`, `never`; Nightshift uses `never` (see below) |
 
 ## Run on the VM
 
@@ -41,16 +51,60 @@ Optional settings:
 | Second positional argument | A separate directory for smoke-test state |
 
 The command verifies the executable version and repository path, then uses existing
-Codex authentication. It never reads or prints authentication tokens. The run calls
-the provider and may consume your plan allowance or incur API charges according to
-your configured authentication. There is no monetary/token cap yet: this smoke test
-limits dispatches to two worker attempts and sets a five-minute deadline per turn.
+Codex authentication. It never reads or prints authentication tokens. The run draws on
+your ChatGPT plan's usage. This smoke test limits dispatches to two worker attempts and
+sets a five-minute deadline per turn.
 
-The adapter requests `readOnly` and `unlessTrusted` on sessions and turns. This is a
-filesystem policy, not a complete restriction on external integrations: review your
-configured MCP tools and hooks first. Prompts also prohibit edits and external changes.
+## Billing: ChatGPT plan only
+
+Nightshift runs Codex only on a ChatGPT sign-in. Four guards stop API-key billing:
+
+1. **Stripped environment.** `OPENAI_*`, `AZURE_OPENAI_*`, and `CODEX_API_KEY` never reach
+   `codex`, for sessions or the startup check.
+2. **Codex enforces it too.** The App Server starts with `-c forced_login_method="chatgpt"`.
+3. **Startup check.** `smoke` and `serve` refuse to start unless `codex login status`
+   reports `Logged in using ChatGPT`. The status line is never echoed, because an
+   API-key line contains part of the key.
+4. **Per-session check, before any thread exists.** `account/read` must return
+   `type: "chatgpt"`, and `thread/start` must report `modelProvider: "openai"`
+   (Nightshift also requests it). Otherwise a `BillingGuardError` blocks the task and
+   pauses the queue. Only account type and plan type are recorded, never the email.
+
+There is no setting to turn these off. Verified live on 2026-10-14: account `chatgpt`,
+plan `prolite`, provider `openai`, default model `gpt-6-astra`.
+
+## Sandbox and approvals
+
+The adapter requests a `read-only` sandbox and approval policy `never` on sessions and
+turns; Codex reports the sandbox as `{"type":"readOnly","networkAccess":false}`.
+`never` means Codex never asks: commands run inside the read-only sandbox, and anything
+needing a write or network access fails there and is reported back to the model.
+Nightshift approves nothing. This mirrors the Claude adapter's `dontAsk` mode.
+
+The first live run used `untrusted` instead. Codex reads files by running shell commands
+and asked for approval on the first one outside its built-in safe list; Nightshift
+correctly recorded that as a blocker, so the inspection could not proceed. Any request
+that still arrives (for example from an MCP tool) is recorded with its command and blocks
+the task.
+
+The sandbox is a filesystem and network policy, not a complete restriction on external integrations:
+review your configured MCP tools and hooks first. Prompts also prohibit edits and external changes.
 Any incoming approval or input request is recorded as a blocker; the adapter does
 not auto-approve it. Start with a minimal tool configuration.
+
+## What was verified (2026-10-14, codex-cli 0.162.1, macOS, ChatGPT prolite)
+
+- `codex:codex`: the worker inspected this repository with 5 read-only shell commands
+  (`rg`, `cat`, `sed`); a separate Codex reviewer re-checked with 6 more and passed it
+  on attempt 1. No approval requests arrived under `never`.
+- `codex:claude`: Codex worker, Claude reviewer; passed on attempt 1.
+- The App Server streamed output as `item/agentMessage/delta` and finished with
+  `item/completed` (agentMessage) and `turn/completed`, as the adapter expects.
+
+Not yet verified: resume of a saved thread, turn interrupt, timeout behavior, and token
+usage (Codex reports it through `thread/tokenUsage/updated`, which is not recorded yet).
+A sandboxed agent shell may block OpenAI's servers (`workspace routing discovery timed
+out`); run live checks from a normal terminal.
 
 ## Expected results
 

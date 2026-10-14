@@ -144,7 +144,7 @@ function smokeFixture(t) {
   const claude = join(directory, 'claude-fixture');
   writeFileSync(claude, `#!/usr/bin/env node\nif (process.argv[2] === '--version') console.log('claude-fixture 1'); else if (process.argv[2] === 'auth') { const method = process.env.FIXTURE_AUTH_METHOD ?? 'claude.ai'; console.log(JSON.stringify({ loggedIn: method !== 'signed-out', authMethod: method === 'signed-out' ? 'none' : method, subscriptionType: 'plan', email: 'private@example.com' })); process.exitCode = method === 'signed-out' ? 1 : 0; } else { process.argv.splice(2, 0, 'normal'); import(${JSON.stringify(pathToFileURL(fixtureFile).href)}); }\n`, { mode: 0o700 });
   const codex = join(directory, 'codex-fixture');
-  writeFileSync(codex, `#!/usr/bin/env node\nif (process.argv[2] === '--version') console.log('codex-fixture 1'); else { process.argv[2] = 'normal'; import(${JSON.stringify(pathToFileURL(codexFixture).href)}); }\n`, { mode: 0o700 });
+  writeFileSync(codex, `#!/usr/bin/env node\nif (process.argv[2] === '--version') console.log('codex-fixture 1'); else if (process.argv[2] === 'login') { const auth = process.env.FIXTURE_CODEX_AUTH ?? 'chatgpt'; console.error(auth === 'chatgpt' ? 'Logged in using ChatGPT' : auth === 'api-key' ? 'Logged in using an API key - sk-proj-SECRET***' : 'Not logged in'); process.exitCode = auth === 'signed-out' ? 1 : 0; } else { process.argv[2] = 'normal'; import(${JSON.stringify(pathToFileURL(codexFixture).href)}); }\n`, { mode: 0o700 });
   return { stateDirectory: join(directory, 'state'),
     env: { ...process.env, NIGHTSHIFT_CLAUDE_BIN: claude, NIGHTSHIFT_CLAUDE_VERSION: 'claude-fixture 1',
       NIGHTSHIFT_CODEX_BIN: codex, NIGHTSHIFT_CODEX_VERSION: 'codex-fixture 1' } };
