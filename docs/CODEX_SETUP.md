@@ -55,6 +55,13 @@ Codex authentication. It never reads or prints authentication tokens. The run dr
 your ChatGPT plan's usage. This smoke test limits dispatches to two worker attempts and
 sets a five-minute deadline per turn.
 
+## Turning Codex off
+
+`node src/cli.js disable codex` records Codex as off in `~/.nightshift/config.json`.
+While it is off, every path that would start Codex (plans, drafts, smoke and repair
+checks) refuses with a pointer to `node src/cli.js enable codex`, `setup` skips it, and
+new plans default to `claude`. Nothing is uninstalled or signed out.
+
 ## Billing: ChatGPT plan only
 
 Nightshift runs Codex only on a ChatGPT sign-in. Four guards stop API-key billing:

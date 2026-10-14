@@ -11,7 +11,7 @@ import { Workspace } from './workspace.js';
 import { execFileSync } from 'node:child_process';
 import { createInterface } from 'node:readline/promises';
 import { fileURLToPath } from 'node:url';
-import { buildPlanner, providerNames, installedVersion, providerCommand, requireSubscription, requireChatgpt } from './providers.js';
+import { buildPlanner, providerNames, installedVersion, providerCommand, requireSubscription, requireChatgpt, isDisabled, defaultAgents } from './providers.js';
 import { draftPlan } from './planner.js';
 import { home, planDir, readConfig, writeConfig, freePlanId } from './home.js';
 import { createPlan, saveDraft, startPlan, stopRunner, mergePlan, discardPlan, summarize, listPlans } from './plans.js';
@@ -20,10 +20,12 @@ const usage = `Usage: node src/cli.js <command> [options]
 
   setup                        Record the installed Claude/Codex versions and check sign-ins
   run <doc> [--steps s]        Draft a plan from a document, ask once, then run it in the background
-        [--repo path] [--agents claude:codex] [--request text] [--base ref] [--yes]
+        [--repo path] [--agents spec] [--request text] [--base ref] [--yes]
                                --base: start the plan's worktree from this commit instead of HEAD
   draft <doc> [same options]   Only draft the plan (review it, then \`start <id>\`)
   start <id> | stop <id>       Start or stop a plan's background runner
+  disable <provider>           Turn claude or codex off: Nightshift will not start it (enable to undo)
+  enable <provider>            Turn it back on
   list [--json]                All plans in ~/.nightshift/plans with progress
   logs <id> [--lines n]        Print the last n lines (default 40) of a plan's runner log
   discard <id> --yes           Remove an unmerged plan: its draft, or its worktree, branch, and directory
@@ -173,6 +175,7 @@ function setup() {
   config.pins ??= {};
   config.commands ??= {};
   for (const name of providerNames) {
+    if (isDisabled(name)) { console.log(`${name}: turned off; skipped (enable it with \`enable ${name}\`).`); continue; }
     let command;
     try { command = execFileSync('/bin/sh', ['-c', `command -v ${providerCommand(name)}`], { encoding: 'utf8' }).trim(); }
     catch { console.log(`${name}: not installed; skipped.`); continue; }
@@ -214,7 +217,7 @@ async function draft() {
     catch { throw new Error(`--base ${values.base} is not a commit in ${repo}.`); }
     base = values.base;
   }
-  const agents = values.agents ?? readConfig().defaultAgents ?? 'claude:codex';
+  const agents = values.agents ?? defaultAgents();
   const plannerName = agents.split(':')[0];
   const planner = buildPlanner(plannerName, repo);
   console.error(`Drafting with ${planner.describe}…`);
@@ -277,8 +280,23 @@ function discard() {
   console.log(`Discarded plan ${argument}:\n${removes.map(r => `  removed ${r}`).join('\n')}`);
 }
 
+// Turning a provider off is local configuration only: nothing is uninstalled or signed out.
+function toggleProvider(enabled) {
+  const name = argument;
+  if (!providerNames.includes(name)) throw new Error(`Give a provider: ${providerNames.join(' or ')}.`);
+  const config = readConfig();
+  const disabled = new Set(config.disabledProviders ?? []);
+  if (enabled) disabled.delete(name); else disabled.add(name);
+  config.disabledProviders = [...disabled].sort();
+  writeConfig(config);
+  console.log(`${name} is now ${enabled ? 'on' : 'off'}. New plans default to: ${defaultAgents()}.` +
+    (enabled ? '' : ` Plans already set up to use ${name} will refuse to run until you enable it.`));
+}
+
 const commands = {
-  demo, serve, add, plan, setup, draft, run, list, logs, discard,
+  demo, serve, add, plan, setup, draft, run, list,
+  disable: () => toggleProvider(false),
+  enable: () => toggleProvider(true), logs, discard,
   start: () => start(),
   stop: async () => { if (!argument) throw new Error('stop requires a plan id.'); console.log(await stopRunner(argument) ? 'Stopped.' : 'Not running.'); },
   merge: async () => {

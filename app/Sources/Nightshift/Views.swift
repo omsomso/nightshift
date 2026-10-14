@@ -323,7 +323,8 @@ struct NewPlanSheet: View {
     @State private var document = ""
     @State private var steps = ""
     @State private var request = ""
-    @State private var agents = "claude:codex"
+    @State private var choices = AgentChoice.available()
+    @State private var agents = AgentChoice.available().first?.spec ?? "claude"
 
     private var drafting: Bool { model.busy.contains("new-plan") }
 
@@ -340,10 +341,11 @@ struct NewPlanSheet: View {
                 TextField("Steps (optional)", text: $steps, prompt: Text("for example: steps 1–10, or the M2 section"))
                 TextField("Notes for the planner (optional)", text: $request)
                 Picker("Agents", selection: $agents) {
-                    Text("Claude works, Codex reviews").tag("claude:codex")
-                    Text("Codex works, Claude reviews").tag("codex:claude")
-                    Text("Claude only").tag("claude")
-                    Text("Codex only").tag("codex")
+                    ForEach(choices) { Text($0.label).tag($0.spec) }
+                }
+                if choices.count < AgentChoice.all.count {
+                    Text("Turned off: \((Config.load()?.disabledProviders ?? []).joined(separator: ", ")). Turn one back on with: node src/cli.js enable <provider>")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
             }
             if drafting {

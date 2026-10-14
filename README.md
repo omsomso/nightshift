@@ -52,6 +52,11 @@ node src/cli.js merge <id>                             # approve: merge the plan
 plan's runner is alive (stop it first) and refuses merged plans. Plan checks may not
 run `git push`, `git commit`, `git reset`, or `git rebase`.
 
+To save one provider's usage, turn it off: `node src/cli.js disable codex` (undo with
+`enable codex`). Nightshift then never starts it, and new plans use Claude for both the
+work and the review, in separate conversations. Codex is currently turned off on the
+development Mac.
+
 For a window and menu-bar view with notifications, build the app (see `app/README.md`):
 
 ```sh

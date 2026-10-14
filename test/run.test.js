@@ -145,3 +145,16 @@ test('draft and run accept --base; the plan records it and its worktree starts t
   assert.equal(bad.status, 1);
   assert.match(bad.stderr, /--base no-such-ref is not a commit/);
 });
+
+test('a turned-off provider is never started, and defaults follow the switch', t => {
+  const e = setupEnv(t);
+  assert.match(e.cli('disable', 'codex'), /codex is now off\. New plans default to: claude\./);
+  assert.match(e.cli('setup'), /codex: turned off; skipped/);
+  const drafted = JSON.parse(e.cli('draft', 'docs/PLAN.md', '--json'));
+  assert.equal(drafted.draft.agents, 'claude', 'Claude works and reviews when Codex is off');
+  const refused = spawnSync(process.execPath, [cliFile, 'draft', 'docs/PLAN.md', '--agents', 'codex:claude'], { cwd: e.repo, env: e.env, encoding: 'utf8' });
+  assert.equal(refused.status, 1);
+  assert.match(refused.stderr, /codex is turned off in Nightshift\. Run `node src\/cli\.js enable codex`/);
+  assert.match(e.cli('enable', 'codex'), /codex is now on\. New plans default to: claude:codex\./);
+  assert.equal(JSON.parse(e.cli('draft', 'docs/PLAN.md', '--json')).draft.agents, 'claude:codex');
+});

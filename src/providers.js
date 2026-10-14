@@ -37,7 +37,19 @@ export const installedVersion = name => execFileSync(providerCommand(name), ['--
 
 // Each provider binary must match the exact version pinned by `setup` (or the environment).
 // A CLI update therefore stops Nightshift until someone re-runs setup and accepts it.
+export const isDisabled = name => (readConfig().disabledProviders ?? []).includes(name);
+
+// The pairing used when none is given: Claude and Codex together unless one is turned off.
+export function defaultAgents() {
+  const configured = readConfig().defaultAgents;
+  if (configured && !configured.split(':').some(isDisabled)) return configured;
+  const enabled = providerNames.filter(name => !isDisabled(name));
+  if (!enabled.length) throw new Error('Every provider is turned off. Run `node src/cli.js enable claude` (or codex).');
+  return enabled.includes('claude') && enabled.includes('codex') ? 'claude:codex' : enabled[0];
+}
+
 function checkedRuntime(name) {
+  if (isDisabled(name)) throw new Error(`${name} is turned off in Nightshift. Run \`node src/cli.js enable ${name}\` to use it again.`);
   const { env } = providers[name];
   const command = providerCommand(name);
   const expected = process.env[`NIGHTSHIFT_${env}_VERSION`] || readConfig().pins?.[name];
