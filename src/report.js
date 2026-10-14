@@ -77,6 +77,11 @@ function planSection(state) {
     `Limits used: ${dispatches}/${plan.limits.dispatches} dispatches, ${tokens.toLocaleString('en-US')}/${plan.limits.tokens.toLocaleString('en-US')} tokens, ` +
       `${hours.toFixed(1)}/${plan.limits.hours} hours.`];
   if (plan.reason) out.push('', `Blocker: ${line(plan.reason)}. After fixing it, run \`node src/cli.js retry ${plan.id}\` and \`resume\`.`);
+  const checks = task => {
+    const last = state.events.findLast(e => e.taskId === task.id && e.type === 'checks');
+    return !last ? 'no checks yet' : last.detail?.passed ? 'checks passed' : 'checks failed';
+  };
+  out.push('', 'Tasks:', ...state.tasks.map(t => `- **${t.title}** (\`${t.id}\`) — ${t.status}; ${t.attempts} attempt(s); ${checks(t)}`));
   const commits = state.tasks.filter(t => t.commit).map(t => `- \`${t.commit.slice(0, 12)}\` ${t.title}`);
   if (commits.length) out.push('', 'Commits:', ...commits);
   if (plan.status === 'awaiting-approval') {
