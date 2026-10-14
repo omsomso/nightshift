@@ -9,7 +9,8 @@ export const defaultLimits = {
   tokens: 5_000_000, // input (including cached) + output, all turns of the plan
   hours: 6,
   changedLinesPerTask: 800,
-  checkMinutes: 10
+  checkMinutes: 10,
+  fixupRounds: 1 // fix-up tasks Nightshift may add after a failed final review or final checks; 0 disables
 };
 
 // No task may change these, whatever the plan's allowed paths say.
@@ -54,7 +55,7 @@ export function validatePlan(plan, baseDir, label = 'plan') {
   const limits = { ...defaultLimits, ...plan.limits };
   limits.dispatches ??= 3 * plan.tasks.length + 2;
   for (const [key, value] of Object.entries(limits)) {
-    if (!(Number(value) > 0)) fail(`limit ${key} must be a positive number.`);
+    if (!(Number(value) > 0) && !(key === 'fixupRounds' && Number(value) === 0)) fail(`limit ${key} must be a positive number.`);
   }
   return {
     id: plan.id, repo: resolve(baseDir, plan.repo), base: plan.base ?? 'HEAD', brief: plan.brief.trim(),

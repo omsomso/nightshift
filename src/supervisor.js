@@ -301,7 +301,7 @@ export class Supervisor {
       const checks = await this.workspace.runChecks({ signal: abort.signal });
       if (abort.signal.aborted) throw abort.signal.reason;
       this.record(null, 'final-checks', { passed: checks.passed, results: checks.results });
-      if (!checks.passed) return stop(`Final checks failed:\n${checkDigest(checks).slice(0, 4000)}`);
+      if (!checks.passed) return this.fixupOrStop(`Final checks failed:\n${checkDigest(checks).slice(0, 4000)}`, stop);
       const planChange = this.workspace.planDiff();
       const commits = this.state.tasks.map(t => `${t.commit?.slice(0, 12)} ${t.title}`);
       const review = await this.reviewer.review({ id: plan.final.id, title: `Whole plan: ${plan.id}`, acceptance: plan.brief },
@@ -312,7 +312,7 @@ export class Supervisor {
         return stop('Final reviewer did not provide a valid decision and reason.');
       }
       plan.final.review = review;
-      if (!review.passed) return stop(`Final review failed: ${review.reason}`);
+      if (!review.passed) return this.fixupOrStop(`Final review failed: ${review.reason}`, stop);
       plan.status = 'awaiting-approval';
       plan.finishedAt = new Date().toISOString();
       this.record(null, 'plan-ready', `Branch ${this.workspace.branch} awaits the owner's merge (${planChange.stat}).`);
@@ -326,6 +326,24 @@ export class Supervisor {
       this.busy = false;
       this.current = null;
     }
+  }
+
+  // A failed final phase turns its findings into one more task, run like any other (sandbox,
+  // gates, checks, review, commit), then the final phase repeats. Bounded by fixupRounds.
+  fixupOrStop(reason, stop) {
+    const plan = this.state.plan;
+    plan.fixups ??= 0;
+    if (plan.fixups >= (plan.limits.fixupRounds ?? 1)) return stop(reason);
+    plan.fixups += 1;
+    const id = `final-fixup-${plan.fixups}`;
+    const task = { id, title: `Fix the final review's findings (round ${plan.fixups})`,
+      acceptance: `Fix these findings, staying within the allowed paths, with tests where they apply. ${reason}`, fixup: true };
+    plan.tasks.push(task);
+    const last = this.state.tasks.at(-1);
+    this.add({ ...task, maxAttempts: plan.limits.attemptsPerTask, dependencies: last ? [last.id] : [] });
+    this.record(id, 'final-fixup-added', reason.slice(0, 4000));
+    this.store.save(this.state);
+    return true;
   }
 
   block(task, error) {

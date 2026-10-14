@@ -165,21 +165,50 @@ test('reaching the plan token limit pauses it; the owner can raise the limit and
   assert.equal(state.plan.status, 'awaiting-approval');
 });
 
-test('a failed final review blocks the plan until the owner reopens it', async t => {
+test('a failed final review becomes one fix-up task, and the plan then passes', async t => {
   const env = makeRepo(t);
   let finalCalls = 0;
   const reviewer = scriptedReviewer((task, context) => !context.final || ++finalCalls > 1);
+  const worker = scriptedWorker();
+  const { store, supervisor } = startPlan(t, env, worker, reviewer);
+  await supervisor.run();
+  const state = store.read();
+  assert.equal(state.plan.status, 'awaiting-approval');
+  assert.deepEqual(state.tasks.map(x => [x.id, x.status]), [['one', 'done'], ['two', 'done'], ['final-fixup-1', 'done']]);
+  const fixup = state.tasks.at(-1);
+  assert.match(fixup.acceptance, /Final review failed: Missing something concrete/);
+  assert.ok(fixup.commit, 'the fix-up was committed like any task');
+  assert.equal(state.plan.fixups, 1);
+  assert.ok(state.events.some(e => e.type === 'final-fixup-added'));
+  assert.equal(finalCalls, 2);
+});
+
+test('when the fix-up round is used up, a failed final review blocks until the owner reopens it', async t => {
+  const env = makeRepo(t);
+  let finalCalls = 0;
+  const reviewer = scriptedReviewer((task, context) => !context.final || ++finalCalls > 2);
   const { store, supervisor } = startPlan(t, env, scriptedWorker(), reviewer);
   await supervisor.run();
   let state = store.read();
   assert.equal(state.plan.status, 'blocked');
   assert.match(state.plan.reason, /Final review failed/);
   assert.equal(state.paused, true);
+  assert.equal(state.tasks.filter(x => x.id.startsWith('final-fixup')).length, 1, 'only one fix-up round by default');
   Store.enqueue(env.state, 'retry', { id: 'demo-plan' });
   Store.enqueue(env.state, 'resume');
   await supervisor.run();
   state = store.read();
   assert.equal(state.plan.status, 'awaiting-approval');
+});
+
+test('fixupRounds 0 blocks at the first failed final review', async t => {
+  const env = makeRepo(t);
+  const reviewer = scriptedReviewer((task, context) => !context.final);
+  const { store, supervisor } = startPlan(t, env, scriptedWorker(), reviewer, { limits: { fixupRounds: 0 } });
+  await supervisor.run();
+  const state = store.read();
+  assert.equal(state.plan.status, 'blocked');
+  assert.equal(state.tasks.length, 2);
 });
 
 test('plans are validated, and a state directory or branch is never reused', t => {
@@ -262,4 +291,16 @@ test('Nightshift refuses to commit if the worktree was moved to another branch',
   await supervisor.run();
   assert.match(store.read().tasks[0].reason, /no longer points at nightshift\/demo-plan/);
   assert.equal(git(env.repo, 'rev-list', '--count', 'nightshift/demo-plan'), '1', 'nothing was committed to the plan branch');
+});
+
+test('the planner reads project rules, and reviewers judge only within the allowed paths', async () => {
+  const { plannerPrompt, editReviewerPrompt, finalReviewPrompt } = await import('../src/prompts.js');
+  const plan = { brief: 'b', allowedPaths: ['src/', 'docs/ROADMAP.md'], checks: ['npm test'], tasks: [{ id: 't', title: 'T', acceptance: 'a' }] };
+  const checks = { passed: true, results: [] };
+  assert.match(plannerPrompt({ doc: 'docs/PLAN.md' }), /AGENTS\.md, CLAUDE\.md/);
+  assert.match(plannerPrompt({ doc: 'docs/PLAN.md' }), /any file the agent instructions require updating/);
+  assert.match(editReviewerPrompt(plan.tasks[0], {}, { checks, reviewDiff: '' }, plan), /Only require changes inside the allowed paths \(src\/, docs\/ROADMAP\.md\)/);
+  const final = finalReviewPrompt(plan, { stat: '', reviewDiff: '' }, checks);
+  assert.match(final, /Allowed paths: src\/, docs\/ROADMAP\.md/);
+  assert.match(final, /Do not fail it for work the tasks did not ask for or that lies outside the allowed paths/);
 });

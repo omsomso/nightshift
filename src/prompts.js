@@ -66,7 +66,8 @@ export function editReviewerPrompt(task, result, change, plan) {
     `Checks Nightshift ran on this change (all passed):\n${checkSummary(change.checks)}`,
     `The change (staged diff against the previous commit):\n\`\`\`diff\n${change.reviewDiff}\n\`\`\``,
     'Return passed=true only if the change meets the acceptance criteria AND stays within the task.',
-    'Return passed=false with a concrete reason if it does unrelated work, weakens or removes tests, adds risky behavior, or misses the criteria.'
+    'Return passed=false with a concrete reason if it does unrelated work, weakens or removes tests, adds risky behavior, or misses the criteria.',
+    `Only require changes inside the allowed paths (${plan.allowedPaths.map(p => p || '(whole repository)').join(', ')}); mention anything else as a suggestion, not a reason to fail.`
   ].join('\n');
 }
 
@@ -78,6 +79,9 @@ export function finalReviewPrompt(plan, planChange, checks) {
     `Tasks:\n${plan.tasks.map((t, i) => `${i + 1}. ${t.title}: ${t.acceptance}`).join('\n')}`,
     `Final checks (all passed):\n${checkSummary(checks)}`,
     `Full change from the base commit (${planChange.stat}):\n\`\`\`diff\n${planChange.reviewDiff}\n\`\`\``,
+    `Allowed paths: ${plan.allowedPaths.map(p => p || '(whole repository)').join(', ')}`,
+    'Judge the plan as defined: its brief and tasks, within its allowed paths. Do not fail it for work the tasks did not ask for or that lies outside the allowed paths; mention that as a suggestion instead.',
+    'Do fail it for real defects in the change (bugs, unsafe behavior, missing criteria), naming each concretely so a follow-up task can fix it.',
     'Return passed=true only if the brief and every task are fully met. Otherwise passed=false with what is missing or wrong.'
   ].join('\n');
 }
@@ -101,13 +105,15 @@ export function plannerPrompt({ doc, steps, request }) {
   return [
     'You are the Nightshift planner, in a read-only conversation. Turn the owner\'s document into an implementation plan.',
     'Do not edit files, install tools, or contact external systems.',
+    'First read the repository\'s agent instructions if present (AGENTS.md, CLAUDE.md, and files they point to). The plan must let the worker follow them.',
     `Task: read ${doc} in this repository${steps ? `, and plan these steps from it: ${steps}` : ', and plan the steps it describes that are not done yet'}.`,
     request ? `The owner adds: ${request}` : '',
     'Rules:',
     '- One task per step, in the document\'s order. Do not invent, merge, split, or reorder steps. If a step is already done in the code, leave it out and say so in notes.',
     '- Each task: a short kebab-case id, a title, and acceptance criteria that a reviewer can check against the code and the checks.',
     '- checks: commands that already exist in this repository (for example package scripts, make or ctest targets), run without network access, and pass today if you can tell. Prefer fast ones. At least one.',
-    '- allowedPaths: the narrowest repository-relative directory prefixes (ending in /) the steps need; [""] only if the whole repository is truly needed.',
+    '- allowedPaths: the narrowest repository-relative prefixes (directories ending in /, or single files) the steps need, plus any file the agent instructions require updating alongside code changes (for example a roadmap or changelog); [""] only if the whole repository is truly needed.',
+    '- If the agent instructions require such an update, say in the relevant task\'s acceptance criteria what to update.',
     '- id: a short kebab-case name for the plan. brief: two or three sentences on the overall goal, in the document\'s own terms.',
     '- notes: anything the owner should know before approving: skipped steps, missing checks, risky steps, or assumptions. Empty string if none.',
     'Return JSON matching the schema.'
