@@ -1,4 +1,5 @@
-import { resolve } from 'node:path';
+import { resolve, join } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
 import { parseArgs } from 'node:util';
 import { Store } from './store.js';
 import { Supervisor } from './supervisor.js';
@@ -23,6 +24,7 @@ const usage = `Usage: node src/cli.js <command> [options]
   draft <doc> [same options]   Only draft the plan (review it, then \`start <id>\`)
   start <id> | stop <id>       Start or stop a plan's background runner
   list [--json]                All plans in ~/.nightshift/plans with progress
+  logs <id> [--lines n]        Print the last n lines (default 40) of a plan's runner log
   merge <id>                   Approve: merge a finished plan's branch into the repository's current branch
 
   demo [state]                 Seed and run the simulated demo
@@ -45,7 +47,8 @@ const { values, positionals } = parseArgs({ allowPositionals: true, options: {
   'max-dispatches': { type: 'string', default: '20' }, 'poll-seconds': { type: 'string', default: '30' },
   id: { type: 'string' }, title: { type: 'string' }, acceptance: { type: 'string' }, after: { type: 'string' },
   'max-attempts': { type: 'string', default: '2' }, since: { type: 'string' }, help: { type: 'boolean' },
-  plan: { type: 'string' }, steps: { type: 'string' }, request: { type: 'string' }, yes: { type: 'boolean' }, json: { type: 'boolean' }
+  plan: { type: 'string' }, steps: { type: 'string' }, request: { type: 'string' }, yes: { type: 'boolean' }, json: { type: 'boolean' },
+  lines: { type: 'string', default: '40' }
 } });
 const [command = 'status', argument] = positionals;
 // demo and status also accept the state directory positionally, as in earlier versions.
@@ -246,8 +249,19 @@ function list() {
   }
 }
 
+function logs() {
+  if (!argument) throw new Error('logs requires a plan id (see `list`).');
+  if (!summarize(argument)) throw new Error(`No plan or draft named ${argument}.`);
+  const lines = positive(values.lines, 'lines');
+  if (!Number.isInteger(lines)) throw new Error('--lines must be a whole number.');
+  const file = join(planDir(argument), 'serve.log');
+  if (!existsSync(file)) return console.log(`Plan ${argument} has no runner log yet.`);
+  const text = readFileSync(file, 'utf8').replace(/\n$/, '');
+  if (text) console.log(text.split('\n').slice(-lines).join('\n'));
+}
+
 const commands = {
-  demo, serve, add, plan, setup, draft, run, list,
+  demo, serve, add, plan, setup, draft, run, list, logs,
   start: () => start(),
   stop: async () => { if (!argument) throw new Error('stop requires a plan id.'); console.log(await stopRunner(argument) ? 'Stopped.' : 'Not running.'); },
   merge: async () => {
