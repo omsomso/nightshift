@@ -1,14 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, writeFileSync, existsSync } from 'node:fs';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync, spawnSync, spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { ClaudeAdapter, ClaudeReviewer } from '../src/adapters/claude.js';
 import { CodexAdapter } from '../src/adapters/codex.js';
 import { RpcClient } from '../src/codex/rpc-client.js';
-import { Supervisor, BillingGuardError } from '../src/supervisor.js';
+import { Supervisor, BillingGuardError, InterruptedError } from '../src/supervisor.js';
 import { Store } from '../src/store.js';
 
 const fixtureFile = fileURLToPath(new URL('../fixtures/claude-cli.js', import.meta.url));
@@ -93,6 +93,15 @@ test('API-key billing blocks the task and pauses the whole queue', async t => {
   assert.ok(saved.events.some(x => x.type === 'billing-guard'));
 });
 
+test('claude interrupt kills the running process promptly', async () => {
+  const abort = new AbortController();
+  const started = Date.now();
+  const run = new ClaudeAdapter(options('stall', { timeoutMs: 10_000 })).execute(sampleTask, { signal: abort.signal,
+    onEvent: event => { if (event.type === 'turn-started') abort.abort(new InterruptedError('Stopped by test.')); } });
+  await assert.rejects(run, error => error instanceof InterruptedError);
+  assert.ok(Date.now() - started < 3000);
+});
+
 test('claude whole-turn deadline bounds a stalled process', async () => {
   await assert.rejects(() => new ClaudeAdapter(options('stall', { timeoutMs: 150 })).execute(sampleTask), /timed out/);
 });
@@ -143,7 +152,7 @@ function smokeFixture(t) {
   const directory = mkdtempSync(join(tmpdir(), 'nightshift-smoke-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   const claude = join(directory, 'claude-fixture');
-  writeFileSync(claude, `#!/usr/bin/env node\nif (process.argv[2] === '--version') console.log('claude-fixture 1'); else if (process.argv[2] === 'auth') { const method = process.env.FIXTURE_AUTH_METHOD ?? 'claude.ai'; console.log(JSON.stringify({ loggedIn: method !== 'signed-out', authMethod: method === 'signed-out' ? 'none' : method, subscriptionType: 'plan', email: 'private@example.com' })); process.exitCode = method === 'signed-out' ? 1 : 0; } else { process.argv.splice(2, 0, 'normal'); import(${JSON.stringify(pathToFileURL(fixtureFile).href)}); }\n`, { mode: 0o700 });
+  writeFileSync(claude, `#!/usr/bin/env node\nif (process.argv[2] === '--version') console.log('claude-fixture 1'); else if (process.argv[2] === 'auth') { const method = process.env.FIXTURE_AUTH_METHOD ?? 'claude.ai'; console.log(JSON.stringify({ loggedIn: method !== 'signed-out', authMethod: method === 'signed-out' ? 'none' : method, subscriptionType: 'plan', email: 'private@example.com' })); process.exitCode = method === 'signed-out' ? 1 : 0; } else { process.argv.splice(2, 0, process.env.FIXTURE_CLAUDE_MODE ?? 'normal'); import(${JSON.stringify(pathToFileURL(fixtureFile).href)}); }\n`, { mode: 0o700 });
   const codex = join(directory, 'codex-fixture');
   writeFileSync(codex, `#!/usr/bin/env node\nif (process.argv[2] === '--version') console.log('codex-fixture 1'); else if (process.argv[2] === 'login') { const auth = process.env.FIXTURE_CODEX_AUTH ?? 'chatgpt'; console.error(auth === 'chatgpt' ? 'Logged in using ChatGPT' : auth === 'api-key' ? 'Logged in using an API key - sk-proj-SECRET***' : 'Not logged in'); process.exitCode = auth === 'signed-out' ? 1 : 0; } else { process.argv[2] = 'normal'; import(${JSON.stringify(pathToFileURL(codexFixture).href)}); }\n`, { mode: 0o700 });
   return { stateDirectory: join(directory, 'state'),
@@ -179,6 +188,37 @@ for (const pairing of ['claude', 'codex', 'codex:claude']) {
     assert.ok(Store.inspect(f.stateDirectory).events.some(e => e.type === 'review-failed' && /FORCED FAILURE/.test(e.detail)));
   });
 }
+
+const cliScript = fileURLToPath(new URL('../src/cli.js', import.meta.url));
+test('serve interrupts a running Claude turn on command from another process', async t => {
+  const f = smokeFixture(t);
+  const env = { ...f.env, FIXTURE_CLAUDE_MODE: 'stall' };
+  const cli = (...args) => execFileSync(process.execPath, [cliScript, ...args, '--state', f.stateDirectory], { env, encoding: 'utf8', timeout: 10_000 });
+  const serve = spawn(process.execPath, [cliScript, 'serve', '--agents', 'claude', '--repo', process.cwd(),
+    '--state', f.stateDirectory, '--poll-seconds', '0.05'], { env, stdio: ['ignore', 'ignore', 'pipe'] });
+  let stderr = '';
+  serve.stderr.on('data', chunk => { stderr += chunk; });
+  const exited = new Promise(done => serve.once('exit', done));
+  t.after(() => serve.kill('SIGKILL'));
+  cli('add', '--id', 'slow', '--title', 'Slow task', '--acceptance', 'Never finishes.');
+  const status = () => { try { return Store.inspect(f.stateDirectory).tasks[0]?.sessions?.worker?.status; } catch { return undefined; } };
+  for (const deadline = Date.now() + 8000; status() !== 'running'; await new Promise(r => setTimeout(r, 50))) {
+    if (Date.now() > deadline) throw new Error(`Turn never started: ${stderr}`);
+  }
+  const requested = Date.now();
+  cli('interrupt');
+  const blocked = () => Store.inspect(f.stateDirectory).tasks[0].status === 'blocked';
+  for (const deadline = Date.now() + 8000; !blocked(); await new Promise(r => setTimeout(r, 50))) {
+    if (Date.now() > deadline) throw new Error(`Interrupt not applied: ${stderr}`);
+  }
+  assert.ok(Date.now() - requested < 4000, 'interrupt applied within a few seconds');
+  const state = Store.inspect(f.stateDirectory);
+  assert.equal(state.paused, true);
+  assert.match(state.tasks[0].reason, /Interrupted by the owner/);
+  assert.equal(state.tasks[0].sessions.worker.status, 'interrupted');
+  serve.kill('SIGTERM');
+  assert.equal(await exited, 0, stderr);
+});
 
 test('smoke command refuses to reuse state with a different provider pairing', t => {
   const f = smokeFixture(t);

@@ -1,6 +1,7 @@
 // A subprocess protocol fixture, not a model or an alternative Codex runtime.
 import { createInterface } from 'node:readline';
 import { randomUUID } from 'node:crypto';
+import { appendFileSync } from 'node:fs';
 
 const mode = process.argv[2] ?? 'normal';
 let initialized = false;
@@ -40,7 +41,10 @@ createInterface({ input: process.stdin }).on('line', line => {
     return response(m.id, { modelProvider: mode === 'other-provider' ? 'ollama' : 'openai',
       thread: { id: threadId, status: { type: mode === 'active' ? 'active' : 'idle' } } });
   }
-  if (m.method === 'turn/interrupt') return response(m.id, {});
+  if (m.method === 'turn/interrupt') {
+    if (process.env.FIXTURE_MARKER) appendFileSync(process.env.FIXTURE_MARKER, `interrupt ${m.params.turnId}\n`);
+    return response(m.id, {});
+  }
   if (m.method !== 'turn/start') return rpcError(m.id, `Unexpected method ${m.method}`);
   if (m.params.sandboxPolicy?.type !== 'readOnly' || m.params.approvalPolicy !== 'never') return rpcError(m.id, 'Expected read-only turn');
   currentTurn = `turn-${randomUUID()}`;

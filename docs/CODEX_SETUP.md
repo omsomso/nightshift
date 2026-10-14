@@ -114,7 +114,12 @@ on a new thread the per-request sum equals Codex's total exactly (worker: 4 requ
 ChatGPT plan. Streamed text is merged before saving (per 4 KB, 5 seconds, or item
 boundary): 8 output events for that run instead of about 938.
 
-Not yet verified: turn interrupt and timeout behavior. A sandboxed agent shell may block
+Interrupt, verified live under `serve`: `node src/cli.js interrupt` was applied within
+about half a second of being queued; the turn was stopped with `turn/interrupt`, the task
+blocked about 40 ms later, partial output was kept, the queue paused, and `serve` then
+exited cleanly with no Nightshift App Server left running.
+
+Not yet verified: timeout behavior. A sandboxed agent shell may block
 OpenAI's servers (`workspace routing discovery timed out`); run live checks from a normal terminal.
 
 ## Expected results

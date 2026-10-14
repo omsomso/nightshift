@@ -15,6 +15,7 @@ const usage = `Usage: node src/cli.js <command> [options]
         spec: simulated, codex, claude, codex:claude, claude:codex
   add --id <id> --title <t> --acceptance <a> [--after id,id] [--max-attempts n]
   pause | resume               Stop or restart dispatch at the next task boundary
+  interrupt                    Stop the running turn now; its task blocks and the queue pauses
   retry <task-id>              Requeue a blocked task after you have reconciled it
   report [--since ISO]         Markdown summary of results, blockers, and usage
 
@@ -70,12 +71,18 @@ async function serve() {
   const beat = setInterval(() => {
     try { store.heartbeat(); } catch (error) { failure = error; stopping = true; wake(); }
   }, store.leaseMs / 3);
+  let control;
   try {
     checkProject(store.read().project, agents.project);
     const supervisor = new Supervisor(store, agents.worker, agents.reviewer);
     supervisor.state.project = agents.project;
     store.save(supervisor.state);
     console.error(`Nightshift serving ${directory}: ${agents.describe}`);
+    // While a turn runs, poll for commands so `interrupt` takes effect within a second.
+    control = setInterval(() => {
+      if (!supervisor.busy) return;
+      try { supervisor.applyCommands(); } catch (error) { failure = error; stopping = true; wake(); }
+    }, 1000);
     let dispatched = 0;
     while (!stopping) {
       if (await supervisor.tick()) {
@@ -93,6 +100,7 @@ async function serve() {
     if (failure) throw failure;
   } finally {
     clearInterval(beat);
+    clearInterval(control);
     process.off('SIGINT', stop);
     process.off('SIGTERM', stop);
     store.release();
@@ -110,7 +118,9 @@ function add() {
 
 function enqueue(type, payload) {
   Store.enqueue(directory, type, payload);
-  console.log(`Queued ${type}. A running \`serve\` applies it at the next task boundary.`);
+  console.log(type === 'interrupt'
+    ? 'Queued interrupt. A running `serve` stops the current turn within about a second.'
+    : `Queued ${type}. A running \`serve\` applies it at the next task boundary.`);
 }
 
 const commands = {
@@ -119,6 +129,7 @@ const commands = {
   report: () => process.stdout.write(renderReport(Store.inspect(directory), { since: values.since })),
   pause: () => enqueue('pause'),
   resume: () => enqueue('resume'),
+  interrupt: () => enqueue('interrupt'),
   retry: () => { if (!argument) throw new Error('retry requires a task ID.'); enqueue('retry', { id: argument }); }
 };
 

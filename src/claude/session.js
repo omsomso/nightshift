@@ -33,7 +33,8 @@ export class ClaudeSession {
     Object.assign(this, { cwd, model, maxBudgetUsd, timeoutMs, command, baseArgs, maxLineBytes });
   }
 
-  async run({ prompt, session, outputSchema, onEvent = () => {} }) {
+  async run({ prompt, session, outputSchema, onEvent = () => {}, signal }) {
+    signal?.throwIfAborted();
     const emit = event => onEvent({ provider: 'claude', ...event });
     const resume = Boolean(session?.threadId);
     // The session ID is chosen here, so it is persisted before any process starts.
@@ -48,6 +49,7 @@ export class ClaudeSession {
     const lines = new JsonlDecoder({ label: 'Claude stream', maxLineBytes: this.maxLineBytes });
     const turn = { sessionId, emit, turnId: null, finished: false };
     let timer;
+    let onAbort;
     try {
       return await new Promise((resolve, reject) => {
         const finish = (error, value) => {
@@ -56,6 +58,10 @@ export class ClaudeSession {
           if (error) reject(error); else resolve(value);
         };
         timer = setTimeout(() => finish(new Error('Claude turn timed out; reconcile its external effects before retrying.')), this.timeoutMs);
+        // Interrupt: settle now; the finally block terminates the process.
+        onAbort = () => finish(signal.reason);
+        if (signal?.aborted) return onAbort();
+        signal?.addEventListener('abort', onAbort, { once: true });
         child.on('error', error => finish(new Error(`Claude process could not start: ${error.message}`)));
         child.on('close', (code, signal) => finish(new Error(`Claude process disconnected (${signal ?? code}); reconcile its last turn before retrying.`)));
         child.stdin.on('error', error => finish(error));
@@ -74,6 +80,7 @@ export class ClaudeSession {
       });
     } finally {
       clearTimeout(timer);
+      if (onAbort) signal?.removeEventListener('abort', onAbort);
       // Best effort only. Terminating the process never rolls back earlier effects.
       if (child.exitCode === null && child.signalCode === null && child.pid) {
         child.kill('SIGTERM');
