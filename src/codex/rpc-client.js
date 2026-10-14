@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { StringDecoder } from 'node:string_decoder';
+import { JsonlDecoder } from '../jsonl.js';
 
 // JSONL transport only. Provider policy and task decisions belong above this layer.
 export class RpcClient extends EventEmitter {
@@ -9,11 +9,9 @@ export class RpcClient extends EventEmitter {
     this.pending = new Map();
     this.nextId = 1;
     this.requestTimeoutMs = requestTimeoutMs;
-    this.maxLineBytes = maxLineBytes;
-    this.buffer = '';
+    this.lines = new JsonlDecoder({ label: 'Codex protocol', maxLineBytes });
     this.failure = null;
     this.closing = false;
-    this.decoder = new StringDecoder('utf8');
     this.child = spawn(command, args, { cwd, stdio: ['pipe', 'pipe', 'pipe'], shell: false });
     this.closed = new Promise(resolve => this.child.once('close', resolve));
     this.child.on('error', error => this.fail(new Error(`Codex process could not start: ${error.message}`)));
@@ -28,33 +26,26 @@ export class RpcClient extends EventEmitter {
 
   read(chunk) {
     if (this.failure || this.closing) return;
-    this.buffer += this.decoder.write(chunk);
-    let newline;
-    while ((newline = this.buffer.indexOf('\n')) >= 0) {
-      const line = this.buffer.slice(0, newline);
-      this.buffer = this.buffer.slice(newline + 1);
-      if (!line.trim()) continue;
-      if (Buffer.byteLength(line) > this.maxLineBytes) return this.fail(new Error('Codex protocol line exceeds size limit.'));
-      try {
-        const message = JSON.parse(line);
-        if (!message || typeof message !== 'object' || Array.isArray(message)) throw new Error('Expected a protocol object.');
-        if (typeof message.method === 'string') {
-          this.emit(Object.hasOwn(message, 'id') ? 'serverRequest' : 'notification', message);
-        } else if (Object.hasOwn(message, 'id')) {
-          const pending = this.pending.get(message.id);
-          if (!pending) continue; // A late response cannot resolve another request.
-          this.pending.delete(message.id);
-          clearTimeout(pending.timer);
-          if (message.error) pending.reject(new Error(`Codex RPC ${pending.method} failed: ${message.error.message ?? 'unknown error'}`));
-          else if (Object.hasOwn(message, 'result')) pending.resolve(message.result);
-          else pending.reject(new Error('Codex response has neither result nor error.'));
-        } else throw new Error('Invalid Codex protocol message.');
-      } catch (error) {
-        return this.fail(new Error(`Codex protocol failure: ${error.message}`));
+    try {
+      for (const message of this.lines.push(chunk)) {
+        this.dispatch(message);
+        if (this.failure || this.closing) return;
       }
-      if (this.failure || this.closing) return;
-    }
-    if (Buffer.byteLength(this.buffer) > this.maxLineBytes) this.fail(new Error('Codex protocol line exceeds size limit.'));
+    } catch (error) { this.fail(error); }
+  }
+
+  dispatch(message) {
+    if (typeof message.method === 'string') {
+      this.emit(Object.hasOwn(message, 'id') ? 'serverRequest' : 'notification', message);
+    } else if (Object.hasOwn(message, 'id')) {
+      const pending = this.pending.get(message.id);
+      if (!pending) return; // A late response cannot resolve another request.
+      this.pending.delete(message.id);
+      clearTimeout(pending.timer);
+      if (message.error) pending.reject(new Error(`Codex RPC ${pending.method} failed: ${message.error.message ?? 'unknown error'}`));
+      else if (Object.hasOwn(message, 'result')) pending.resolve(message.result);
+      else pending.reject(new Error('Codex response has neither result nor error.'));
+    } else throw new Error('Codex protocol failure: Invalid Codex protocol message.');
   }
 
   send(message) {

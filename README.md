@@ -2,9 +2,10 @@
 
 A personal, local-first workspace that keeps coding agents moving while you are away.
 
-**Status: supervisor core plus an initial Codex App Server adapter.**
-The adapter is tested against a subprocess protocol fixture; live Codex compatibility
-still needs verification on your VM. Claude and the web interface are not implemented.
+**Status: supervisor core plus initial Codex and Claude adapters.**
+Both adapters share one set of worker/reviewer prompts and are tested against
+subprocess fixtures. Either provider can be the worker or the reviewer. Neither has
+completed a live signed-in run yet. The web interface is not implemented.
 The default demo is simulated and does not call a model or spend API credits.
 
 ## Why
@@ -45,21 +46,24 @@ production database or a live-agent daemon.
 - `docs/ROADMAP.md`: ordered implementation backlog and next-agent handoff.
 - `src/supervisor.js`: queue and verification state machine.
 - `src/store.js`: local state and exclusive runner lock.
-- `src/adapters/simulated.js`: explicitly simulated integration for development.
-- `src/adapters/codex.js`: Codex worker and separate reviewer conversation.
-- `src/codex/`: JSONL transport, session management, and turn events.
-- `src/codex-smoke.js`: version-checked, read-only compatibility run.
-- `docs/CODEX_SETUP.md`: VM setup, compatibility boundaries, and recovery notes.
+- `src/prompts.js`: provider-neutral worker/reviewer prompts and result schemas.
+- `src/adapters/`: simulated, Codex, and Claude workers and reviewers (`agent.js` is shared).
+- `src/codex/`: App Server JSONL transport, session management, and turn events.
+- `src/claude/`: headless `claude -p` session, read-only flags, and stream events.
+- `src/jsonl.js`: line framing shared by both transports.
+- `src/smoke.js`: version-checked, read-only compatibility run for any provider pairing.
+- `docs/CODEX_SETUP.md`, `docs/CLAUDE_SETUP.md`: setup, verified behavior, and recovery notes.
 - `test/supervisor.test.js`: behavioral checks for unattended execution.
-- `test/codex.test.js`: subprocess protocol and persisted session tests.
+- `test/codex.test.js`, `test/claude.test.js`: subprocess protocol and persisted session tests.
 
 ## Next milestone
 
-Run the Codex compatibility check on the VM using `docs/CODEX_SETUP.md`, generate the
-installed version's protocol schemas, and resolve any mismatch. The adapter currently
-requests read-only filesystem access. Workspace writes, daemon management, and the
-authenticated responsive UI come after this checkpoint. Claude follows through its
-own adapter once authentication and billing requirements are confirmed.
+Run the live compatibility checks on the machine that will host Nightshift:
+`npm run codex:smoke` (see `docs/CODEX_SETUP.md`), `npm run claude:smoke` (see
+`docs/CLAUDE_SETUP.md`), and one mixed pairing such as `npm run smoke -- codex:claude`.
+Resolve any protocol mismatch they reveal. Both adapters are read-only for now.
+Workspace writes, daemon management, and the authenticated responsive UI come after
+this checkpoint.
 
 ## Git and remote setup
 

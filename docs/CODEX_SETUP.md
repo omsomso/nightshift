@@ -57,7 +57,7 @@ not auto-approve it. Start with a minimal tool configuration.
 - A worker inspects the project and returns cited evidence.
 - A distinct reviewer conversation inspects that evidence against the repository.
 - The controller marks the task done, requests a bounded repair, or records a blocker.
-- `.nightshift/codex-smoke/state.json` retains task status, thread/turn IDs, and events.
+- `.nightshift/codex-smoke/state.json` (or `.nightshift/codex-claude-smoke/` for a mixed pairing) retains task status, thread/turn IDs, and events.
 - A repeated command does not replay a completed or blocked task.
 
 Exit codes: `0` means all tasks passed review, `2` means some tasks remain incomplete,
