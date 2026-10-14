@@ -32,9 +32,12 @@ provider permission decisions. Turn completion only moves a task into review.
 ## Bootstrap implementation
 
 `Supervisor.tick()` dispatches at most one ready task and awaits its worker and
-reviewer. The adapter contract is `execute(task) -> {summary, evidence: string[]}`;
-the independent reviewer returns `{passed: boolean, reason: string}`. It is an
-intentionally small seam, to be extended with real session IDs and streamed events.
+reviewer. The adapter contract is `execute(task, {onEvent}) -> {summary, evidence:
+string[]}`; the independent reviewer returns `{passed: boolean, reason: string}`.
+Both receive a synchronous event persistence callback. Worker and reviewer session
+IDs are stored separately on the task. A thread checkpoint must succeed before a
+turn is submitted. The dispatch-intent event covers the uncertain interval before
+Codex acknowledges the turn ID.
 
 Tasks move through `ready -> running -> review -> done`, with review failures
 returning to `ready` until their attempt limit. Explicit blockers, adapter errors,
@@ -46,12 +49,31 @@ may leave the lock behind: verify the recorded PID is no longer running before
 manually removing `.nightshift/runner.lock`. Recovery changes `running` and `review`
 tasks to `blocked`, because their external effects cannot safely be replayed.
 
-Limitations: one process, no multi-host support, no live cancellation, no provider
-reconciliation, no power-loss durability guarantee, no daemon or HTTP server.
+Limitations: one process, no multi-host support, no user-facing live cancellation,
+no provider reconciliation, no power-loss durability guarantee, no daemon or HTTP server.
 Pause currently applies at task boundaries within one supervisor instance. These
 limitations are explicit roadmap work, not completed features.
 
-## Live adapter contract (next milestone)
+## Initial Codex adapter
+
+The initial adapter implements thread start/resume, turn execution, request/response
+correlation, chunked JSONL parsing, and a bounded wait for completion. It requests a
+read-only filesystem sandbox. It records output, completed items, provider errors,
+session IDs, turn IDs, and requests for human input. Its schema-shaped final result
+is still an agent claim; a separate reviewer inspects the actual repository.
+
+Server-initiated requests become blockers. The connection is closed without an
+approval response; a future approval UI must reconcile the provider request rather
+than submit an old request ID. The adapter attempts an interrupt for known turns
+on failure and terminates its App Server child. This does not guarantee cancellation
+of every external tool process or undo prior effects. Completed output is correlated
+by both thread and turn; unrelated notifications cannot complete a task.
+
+The documentation-shaped fixture covers integration plumbing, not authentication,
+provider execution, sandbox effectiveness, or compatibility with an installed binary.
+The VM smoke command requires an exact version string and existing authentication.
+
+## Expanded live adapter contract (next milestone)
 
 Adapters should expose start/resume/send/interrupt and an async event stream.
 Normalize session-started, output, tool-activity, approval-required, turn-completed,

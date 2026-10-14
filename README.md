@@ -2,9 +2,10 @@
 
 A personal, local-first workspace that keeps coding agents moving while you are away.
 
-**Status: repository bootstrap, with a tested supervisor core and simulated worker.**
-No live Codex/Claude adapter or web interface is implemented yet. The demo does not
-call a model, modify a target repository, or spend API credits.
+**Status: supervisor core plus an initial Codex App Server adapter.**
+The adapter is tested against a subprocess protocol fixture; live Codex compatibility
+still needs verification on your VM. Claude and the web interface are not implemented.
+The default demo is simulated and does not call a model or spend API credits.
 
 ## Why
 
@@ -45,14 +46,20 @@ production database or a live-agent daemon.
 - `src/supervisor.js`: queue and verification state machine.
 - `src/store.js`: local state and exclusive runner lock.
 - `src/adapters/simulated.js`: explicitly simulated integration for development.
+- `src/adapters/codex.js`: Codex worker and separate reviewer conversation.
+- `src/codex/`: JSONL transport, session management, and turn events.
+- `src/codex-smoke.js`: version-checked, read-only compatibility run.
+- `docs/CODEX_SETUP.md`: VM setup, compatibility boundaries, and recovery notes.
 - `test/supervisor.test.js`: behavioral checks for unattended execution.
+- `test/codex.test.js`: subprocess protocol and persisted session tests.
 
 ## Next milestone
 
-Implement a version-pinned Codex App Server adapter and prove one real task can be
-started, observed, reviewed, and continued from persisted session IDs. Then add the
-background service and authenticated responsive UI. Claude follows through its own
-adapter once authentication and billing requirements are confirmed.
+Run the Codex compatibility check on the VM using `docs/CODEX_SETUP.md`, generate the
+installed version's protocol schemas, and resolve any mismatch. The adapter currently
+requests read-only filesystem access. Workspace writes, daemon management, and the
+authenticated responsive UI come after this checkpoint. Claude follows through its
+own adapter once authentication and billing requirements are confirmed.
 
 ## Git and remote setup
 

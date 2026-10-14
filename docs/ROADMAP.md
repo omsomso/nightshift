@@ -12,10 +12,11 @@
 
 - [ ] Record the VM OS and install/authenticate a specific Codex version there.
 - [ ] Generate its App Server schemas and document protocol compatibility.
-- [ ] Implement local stdio initialization, thread start/resume, and turn streaming.
-- [ ] Persist session IDs and correlate responses, errors, and approval requests.
+- [x] Implement local stdio initialization, thread start/resume, and turn streaming (fixture-tested).
+- [x] Persist session IDs and correlate responses, errors, and approval requests (fixture-tested).
 - [ ] Exercise one harmless repository task and an evidence-based review/fix turn.
-- [ ] Test disconnect, process failure, stale state, and permission blockers.
+- [x] Test disconnect, process failure, stale state, and permission blockers against protocol fixtures.
+- [ ] Repeat compatibility/failure checks against the installed Codex build on the VM.
 
 Exit: one real task and follow-up run through the adapter without desktop clicks.
 
@@ -44,7 +45,10 @@ Exit: one real task and follow-up run through the adapter without desktop clicks
 
 ## Handoff
 
-Start with M1. Do not build the full dashboard before proving session control.
-The current scaffold uses only simulated workers: it has not connected to the
-owner's VM, accessed their existing chats, or executed a live coding agent.
-Run `npm test` and `npm run demo` to establish the bootstrap baseline.
+Finish M1 using docs/CODEX_SETUP.md. Do not build the full dashboard before proving
+live session control. The adapter implements a documented protocol subset, but no
+Codex executable is installed in the development workspace. It has not connected
+to the owner's VM, accessed existing chats, or executed a live coding agent.
+Run `npm test` (28 tests) and `npm run demo` for the offline baseline. The live smoke
+command is separate and can consume provider usage. Its version pin is an operator
+check, not a declaration that a specific Codex release has been certified.

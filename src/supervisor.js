@@ -41,6 +41,28 @@ export class Supervisor {
 
   snapshot() { return structuredClone(this.state); }
 
+  observer(task, role) {
+    return event => {
+      if (!event || typeof event.type !== 'string') throw new Error('Invalid adapter event.');
+      if (event.type === 'session' || event.type === 'turn-started') {
+        task.sessions ??= {};
+        task.sessions[role] = { ...task.sessions[role], provider: event.provider, threadId: event.threadId,
+          ...(event.turnId ? { turnId: event.turnId } : {}) };
+      }
+      if (event.type === 'dispatch-intent') {
+        const session = task.sessions?.[role];
+        if (!session) throw new Error('Dispatch requires a persisted provider session.');
+        session.previousTurnId = session.turnId ?? null;
+        session.turnId = null;
+        session.status = 'dispatching';
+      }
+      if (event.type === 'turn-started') task.sessions[role].status = 'running';
+      if (event.type === 'turn-completed' && task.sessions?.[role]) task.sessions[role].status = event.status;
+      this.record(task.id, `provider:${event.type}`, { role, ...event });
+      this.store.save(this.state);
+    };
+  }
+
   async tick() {
     if (this.busy || this.state.paused) return false;
     const task = this.state.tasks.find(candidate => candidate.status === 'ready' &&
@@ -62,7 +84,7 @@ export class Supervisor {
 
       let result;
       try {
-        result = await this.adapter.execute(structuredClone(task));
+        result = await this.adapter.execute(structuredClone(task), { onEvent: this.observer(task, 'worker') });
         if (!result || typeof result.summary !== 'string' || !Array.isArray(result.evidence) ||
             !result.evidence.length || result.evidence.some(item => typeof item !== 'string' || !item.trim())) {
           throw new BlockedError('Worker did not provide a valid result with evidence.');
@@ -78,7 +100,7 @@ export class Supervisor {
 
       let review;
       try {
-        review = await this.reviewer.review(structuredClone(task), structuredClone(result));
+        review = await this.reviewer.review(structuredClone(task), structuredClone(result), { onEvent: this.observer(task, 'reviewer') });
         if (!review || typeof review.passed !== 'boolean' || typeof review.reason !== 'string' || !review.reason.trim()) {
           throw new BlockedError('Reviewer did not provide a valid decision and reason.');
         }

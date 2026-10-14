@@ -1,6 +1,6 @@
 {
   "name": "nightshift-supervisor",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "A local-first supervisor for unattended coding agents",
@@ -8,6 +8,7 @@
   "scripts": {
     "test": "node --test",
     "demo": "node src/cli.js demo",
-    "status": "node src/cli.js status"
+    "status": "node src/cli.js status",
+    "codex:smoke": "node src/codex-smoke.js"
   }
 }
