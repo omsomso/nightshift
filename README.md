@@ -89,14 +89,6 @@ Workspace writes and the authenticated responsive UI come after this checkpoint.
 
 ## Git and remote setup
 
-This directory is a Git repository on branch `main`. No hosting provider, remote,
-or open-source license has been selected. The portable archive includes its initial
-Git history. After extracting it, a GitHub CLI user can create a private repository:
-
-```sh
-gh repo create nightshift --private --source=. --remote=origin --push
-```
-
-Run that command from this directory only after authenticating to the intended
-GitHub account. Alternatively, create an empty repository in your preferred Git
-host, add its URL as `origin`, and push `main`.
+The repository is hosted privately at https://github.com/omsomso/nightshift (branch
+`main`). No open-source license has been chosen. Runtime state (`.nightshift/`) and
+`.env` files are excluded from Git.
