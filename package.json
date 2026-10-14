@@ -1,0 +1,13 @@
+{
+  "name": "nightshift-supervisor",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A local-first supervisor for unattended coding agents",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "test": "node --test",
+    "demo": "node src/cli.js demo",
+    "status": "node src/cli.js status"
+  }
+}
