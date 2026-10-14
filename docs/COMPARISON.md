@@ -64,5 +64,10 @@ Edge cases probed on both branches with a throwaway home:
   Nightshift for long or overnight plans, risky changes, or when you want a second
   model to check the work before you see it.
 
+Follow-up (same day): branch A was merged into `main`, and both Nightshift flaws were
+addressed: the planner now reads project rules, reviews judge only within the plan's
+allowed paths, and a failed final phase becomes one bounded fix-up task. These fixes
+are covered by fixture tests; the comparison itself has not been re-run.
+
 Branches: A is `compare/plain` (worktree `.nightshift/compare/plain`); B is
-`nightshift/cli-store-polish` (plan `cli-store-polish`, blocked). Neither is merged.
+`nightshift/cli-store-polish` (plan `cli-store-polish`, blocked; not merged).

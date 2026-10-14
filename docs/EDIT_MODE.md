@@ -36,7 +36,11 @@ not by prompts alone.
    and review reason, within the attempt limit.
 
 After the last task: run the full checks again, then a final review against the brief.
-If both pass, the plan becomes `awaiting-approval`. The morning report shows the
+If both pass, the plan becomes `awaiting-approval`. If either fails, Nightshift turns the
+findings into one fix-up task (`final-fixup-1`), runs it through the same cycle, and
+repeats the final phase; when the fix-up rounds are used up, the plan blocks. The final
+review judges only the plan's brief and tasks within its allowed paths; other
+observations are suggestions, not failures. The morning report shows the
 branch, diff summary, checks, and usage. Only the owner merges.
 
 ## Kill switches (all enforced by the controller)
@@ -49,6 +53,7 @@ branch, diff summary, checks, and usage. Only the owner merges.
 | Tokens per plan | 5 M (input incl. cached + output) | plan pauses |
 | Wall-clock per plan | 6 h | plan pauses |
 | Changed lines per task | 800 | attempt fails the gate |
+| Fix-up rounds after a failed final phase | 1 (0 disables) | plan blocks |
 | Same failing check output twice, or an empty diff | — | task blocks (stagnation) |
 | File outside allowed paths or a protected path | — | task blocks (drift) |
 
@@ -80,7 +85,9 @@ own state.
 Usually you do not write the plan by hand: `node src/cli.js run <doc> [--steps ...]` (or
 New Plan in the app) has a read-only agent draft it from a document in the repository,
 one task per step without inventing or reordering steps, and you approve the draft
-before anything runs. To write one by hand instead, use a plan file (JSON). `repo` is relative to the plan file; `allowedPaths` are
+before anything runs. The planner first reads the repository's agent instructions
+(AGENTS.md, CLAUDE.md) and includes in the allowed paths any file they require
+updating, such as a roadmap. To write one by hand instead, use a plan file (JSON). `repo` is relative to the plan file; `allowedPaths` are
 repository-relative prefixes (omit for the whole repository); `limits` override the
 defaults above.
 
