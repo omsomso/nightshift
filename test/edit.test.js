@@ -185,6 +185,11 @@ test('a failed final review blocks the plan until the owner reopens it', async t
 test('plans are validated, and a state directory or branch is never reused', t => {
   const env = makeRepo(t);
   assert.throws(() => loadPlan(writePlan(env, { checks: [] })), /checks must list at least one command/);
+  for (const command of ['git push origin main', 'npm test && git commit -am x', 'git  reset --hard', 'git rebase main']) {
+    assert.throws(() => loadPlan(writePlan(env, { checks: ['node check.js', command] })),
+      error => error.message.includes(`check "${command}" changes Git history`));
+  }
+  assert.equal(loadPlan(writePlan(env, { checks: ['git status --porcelain', 'git diff --check'] })).checks.length, 2);
   assert.throws(() => loadPlan(writePlan(env, { id: 'Bad Id' })), /id must be lowercase/);
   assert.throws(() => loadPlan(writePlan(env, { limits: { speed: 1 } })), /unknown limits: speed/);
   assert.throws(() => loadPlan(writePlan(env, { allowedPaths: ['../elsewhere'] })), /repository-relative/);
