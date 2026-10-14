@@ -21,9 +21,15 @@ export class CodexSession {
     this.createClient = createClient;
   }
 
-  async run({ prompt, session, outputSchema, onEvent = () => {} }) {
+  async run({ prompt, session, outputSchema, onEvent = () => {}, signal }) {
+    signal?.throwIfAborted();
     const client = this.createClient();
     const emit = event => onEvent({ provider: 'codex', ...event });
+    // Before the turn exists, an interrupt just drops the connection; once it exists,
+    // turn() sends turn/interrupt first.
+    let inTurn = false;
+    const onAbort = () => { if (!inTurn) client.fail(signal.reason); };
+    signal?.addEventListener('abort', onAbort, { once: true });
     const blockOnRequest = message => {
       emit({ type: 'approval-required', method: message.method, requestId: message.id,
         threadId: message.params?.threadId, turnId: message.params?.turnId,
@@ -59,14 +65,16 @@ export class CodexSession {
       if (opened.thread.status?.type === 'active') throw new BlockedError('Existing Codex thread is still active; reconciliation is required.');
       // A synchronous persistence callback must succeed before turn/start is sent.
       emit({ type: 'session', threadId });
-      return await this.turn(client, { threadId, prompt, outputSchema, emit });
+      inTurn = true;
+      return await this.turn(client, { threadId, prompt, outputSchema, emit, signal });
     } finally {
+      signal?.removeEventListener('abort', onAbort);
       client.removeListener('serverRequest', blockOnRequest);
       await client.close();
     }
   }
 
-  async turn(client, { threadId, prompt, outputSchema, emit }) {
+  async turn(client, { threadId, prompt, outputSchema, emit, signal }) {
     let turnId;
     let buffer = [];
     let finalText = '';
@@ -142,7 +150,10 @@ export class CodexSession {
     const timer = setTimeout(() => fail(new Error('Codex turn timed out; reconcile its external effects before retrying.')), this.timeoutMs);
     client.on('notification', notification);
     client.on('fatal', fail);
+    const onAbort = () => fail(signal.reason);
+    signal?.addEventListener('abort', onAbort, { once: true });
     try {
+      signal?.throwIfAborted();
       emit({ type: 'dispatch-intent', threadId });
       const started = await Promise.race([client.request('turn/start', {
         threadId, input: [{ type: 'text', text: prompt }],
@@ -164,6 +175,7 @@ export class CodexSession {
       throw error;
     } finally {
       clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
       client.removeListener('notification', notification);
       client.removeListener('fatal', fail);
     }

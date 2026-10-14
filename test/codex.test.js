@@ -1,13 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { RpcClient } from '../src/codex/rpc-client.js';
 import { CodexAdapter, CodexReviewer } from '../src/adapters/codex.js';
-import { Supervisor, BillingGuardError } from '../src/supervisor.js';
+import { Supervisor, BillingGuardError, InterruptedError } from '../src/supervisor.js';
 import { createAppServer } from '../src/codex/session.js';
 import { Store } from '../src/store.js';
 
@@ -62,6 +62,21 @@ for (const mode of ['stall', 'start-stall']) {
     await assert.rejects(() => new CodexAdapter(options(mode, { timeoutMs: 150 })).execute(sampleTask), /timed out/);
   });
 }
+
+test('codex interrupt sends turn/interrupt for the running turn, then stops', async t => {
+  const directory = mkdtempSync(join(tmpdir(), 'nightshift-interrupt-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const marker = join(directory, 'marker');
+  const saved = process.env.FIXTURE_MARKER;
+  process.env.FIXTURE_MARKER = marker;
+  t.after(() => { saved === undefined ? delete process.env.FIXTURE_MARKER : process.env.FIXTURE_MARKER = saved; });
+  const abort = new AbortController();
+  let turnId;
+  const run = new CodexAdapter(options('stall', { timeoutMs: 10_000 })).execute(sampleTask, { signal: abort.signal,
+    onEvent: event => { if (event.type === 'turn-started') { turnId = event.turnId; abort.abort(new InterruptedError('Stopped by test.')); } } });
+  await assert.rejects(run, error => error instanceof InterruptedError);
+  assert.equal(readFileSync(marker, 'utf8'), `interrupt ${turnId}\n`);
+});
 
 test('RPC request timeout also bounds initialization', async () => {
   const createClient = () => new RpcClient({ command: process.execPath, args: [fixtureFile, 'rpc-timeout'], requestTimeoutMs: 150 });

@@ -62,15 +62,25 @@ and `review` tasks to `blocked`, because their external effects cannot safely be
 replayed. A person can requeue one with `retry` after reconciling it.
 
 Other processes never write task state. `status` and `report` open the database
-read-only; `add`, `pause`, `resume`, and `retry` append to `commands`, which the
-runner applies at the start of each tick, never during a turn. Invalid commands
-become `command-rejected` events. `serve` loops over ticks, sleeps when idle, stops
-cleanly on SIGINT/SIGTERM after the current step, and pauses itself (persistently)
-after a dispatch cap so an automatic restart cannot reset the cap.
+read-only; `add`, `pause`, `resume`, `retry`, and `interrupt` append to `commands`.
+The runner applies them at the start of each tick, and `serve` also polls them every
+second while a turn runs. Only `interrupt` acts on the running turn; the others change
+what the next tick does. Invalid commands become `command-rejected` events. `serve`
+loops over ticks, sleeps when idle, stops cleanly on SIGINT/SIGTERM after the current
+step, and pauses itself (persistently) after a dispatch cap so an automatic restart
+cannot reset the cap.
 
-Limitations: one runner per state directory, no multi-host support, no live
-interrupt of a running turn, no provider reconciliation, no HTTP server, and the
-runner keeps the full event log in memory. These are roadmap work.
+Interrupt is explicit manual takeover. Each dispatch gets an `AbortController` whose
+signal reaches the adapter. Claude settles and terminates its process; Codex sends
+`turn/interrupt` for the known turn, then closes the App Server (before a turn exists
+it just closes). The task becomes `blocked` with an `InterruptedError`, any running
+session is marked `interrupted`, and the queue pauses, so nothing restarts until the
+owner runs `retry` and `resume`. A result that arrives after the abort is discarded,
+never reviewed. Partial streamed output is kept.
+
+Limitations: one runner per state directory, no multi-host support, no provider
+reconciliation, no HTTP server, and the runner keeps the full event log in memory.
+These are roadmap work.
 
 ## Initial Codex adapter
 

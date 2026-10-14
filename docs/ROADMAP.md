@@ -36,7 +36,7 @@ Exit: one real task and follow-up run through each adapter without desktop click
 - [x] Dispatch cap that persists as a pause; per-turn timeouts; bounded attempts.
 - [ ] Token/spend caps across a night and stagnation detection.
 - [x] Pause, resume, and manual retry from other processes via a command queue.
-- [ ] Live interrupt of a running turn and explicit manual takeover.
+- [x] Live interrupt of a running turn as explicit manual takeover (`interrupt`; live-checked with Codex).
 - [x] Long-running `serve` loop with clean shutdown; launchd/systemd examples (not installed).
 - [x] Markdown morning report (`report --since`).
 
@@ -64,6 +64,6 @@ protocol subsets. On the development Mac, codex:codex, claude:claude, and codex:
 read-only runs have all passed review (see the setup docs); no adapter has edited files.
 Neither adapter has run on the owner's VM or accessed existing chats. Commands run from
 an agent sandbox may lack network access to OpenAI; run live checks from a normal terminal.
-Run `npm test` (73 tests) and `npm run demo` for the offline baseline. The live smoke
+Run `npm test` (79 tests) and `npm run demo` for the offline baseline. The live smoke
 commands are separate and can consume provider usage. Their version pins are operator
 checks, not declarations that a specific release has been certified.

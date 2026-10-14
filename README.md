@@ -40,6 +40,7 @@ talk to it through the state database, so they work from another terminal while 
 node src/cli.js serve --agents simulated            # or claude, codex, codex:claude --repo /path
 node src/cli.js add --id docs --title "Document setup" --acceptance "README lists the steps."
 node src/cli.js pause                                # stops new dispatch at the next boundary
+node src/cli.js interrupt                            # stops the running turn now and pauses
 node src/cli.js resume
 node src/cli.js retry <task-id>                      # requeue a blocked task you have reconciled
 node src/cli.js report --since 2026-10-14T00:00Z     # Markdown morning report
@@ -84,8 +85,7 @@ Run the live compatibility checks on the machine that will host Nightshift:
 `npm run codex:smoke` (see `docs/CODEX_SETUP.md`), `npm run claude:smoke` (see
 `docs/CLAUDE_SETUP.md`), and one mixed pairing such as `npm run smoke -- codex:claude`.
 Resolve any protocol mismatch they reveal. Both adapters are read-only for now.
-Live interrupt, workspace writes, and the authenticated responsive UI come after this
-checkpoint.
+Workspace writes and the authenticated responsive UI come after this checkpoint.
 
 ## Git and remote setup
 

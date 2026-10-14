@@ -1,6 +1,9 @@
 export class BlockedError extends Error {}
-// Affects every task, not just this one: blocks the task and pauses the whole queue.
+// Both of these block the task and pause the whole queue.
+// A billing problem affects every task, not just this one.
 export class BillingGuardError extends BlockedError {}
+// The owner stopped the turn in flight and takes over from here.
+export class InterruptedError extends BlockedError {}
 
 export class Supervisor {
   constructor(store, adapter, reviewer) {
@@ -9,6 +12,7 @@ export class Supervisor {
     this.reviewer = reviewer;
     this.state = store.read();
     this.busy = false;
+    this.current = null; // { task, abort } while a dispatch is in flight
     for (const task of this.state.tasks) {
       if (['running', 'review'].includes(task.status)) {
         task.status = 'blocked';
@@ -53,7 +57,19 @@ export class Supervisor {
     this.store.save(this.state);
   }
 
-  // Commands queued by other processes apply only between dispatches.
+  // Stops the dispatch in flight. Adapters receive the abort signal; whatever they
+  // return afterwards is discarded, never reviewed or marked done.
+  interrupt() {
+    if (!this.current) throw new Error('Nothing is running.');
+    const { task, abort } = this.current;
+    if (abort.signal.aborted) return;
+    this.record(task.id, 'interrupt-requested', 'Stopping the current turn.');
+    this.store.save(this.state);
+    abort.abort(new InterruptedError('Interrupted by the owner; reconcile any partial effects, then retry or take over.'));
+  }
+
+  // Commands queued by other processes. `serve` also applies them during a turn, so
+  // interrupt takes effect promptly; the rest only change what the next tick does.
   applyCommands() {
     if (!this.store.takeCommands) return;
     for (const command of this.store.takeCommands()) {
@@ -62,6 +78,7 @@ export class Supervisor {
         else if (command.type === 'resume') this.pause(false);
         else if (command.type === 'add-task') this.add(command.payload);
         else if (command.type === 'retry') this.retry(command.payload?.id);
+        else if (command.type === 'interrupt') this.interrupt();
         else throw new Error('Unknown command.');
       } catch (error) {
         this.record(command.payload?.id ?? null, 'command-rejected', `${command.type}: ${error.message}`);
@@ -102,6 +119,9 @@ export class Supervisor {
       candidate.dependencies.every(id => this.state.tasks.some(other => other.id === id && other.status === 'done')));
     if (!task) return false;
     this.busy = true;
+    const abort = new AbortController();
+    this.current = { task, abort };
+    const context = role => ({ onEvent: this.observer(task, role), signal: abort.signal });
     try {
       if (task.attempts >= task.maxAttempts) {
         task.status = 'blocked';
@@ -117,7 +137,8 @@ export class Supervisor {
 
       let result;
       try {
-        result = await this.adapter.execute(structuredClone(task), { onEvent: this.observer(task, 'worker') });
+        result = await this.adapter.execute(structuredClone(task), context('worker'));
+        if (abort.signal.aborted) throw abort.signal.reason;
         if (!result || typeof result.summary !== 'string' || !Array.isArray(result.evidence) ||
             !result.evidence.length || result.evidence.some(item => typeof item !== 'string' || !item.trim())) {
           throw new BlockedError('Worker did not provide a valid result with evidence.');
@@ -133,7 +154,8 @@ export class Supervisor {
 
       let review;
       try {
-        review = await this.reviewer.review(structuredClone(task), structuredClone(result), { onEvent: this.observer(task, 'reviewer') });
+        review = await this.reviewer.review(structuredClone(task), structuredClone(result), context('reviewer'));
+        if (abort.signal.aborted) throw abort.signal.reason;
         if (!review || typeof review.passed !== 'boolean' || typeof review.reason !== 'string' || !review.reason.trim()) {
           throw new BlockedError('Reviewer did not provide a valid decision and reason.');
         }
@@ -147,13 +169,27 @@ export class Supervisor {
       this.record(task.id, review.passed ? 'verified' : 'review-failed', review.reason);
       this.store.save(this.state);
       return true;
-    } finally { this.busy = false; }
+    } finally {
+      this.busy = false;
+      this.current = null;
+    }
   }
 
   block(task, error) {
+    // An abort can surface as a provider error (for example a killed process); the
+    // owner's interrupt is the real cause.
+    if (this.current?.abort.signal.aborted && !(error instanceof InterruptedError)) error = this.current.abort.signal.reason;
     task.status = 'blocked';
     task.reason = error instanceof BlockedError ? error.message : `Execution uncertain: ${error.message ?? String(error)}`;
     this.record(task.id, 'blocked', task.reason);
+    if (error instanceof InterruptedError) {
+      // The provider may never report completion for a stopped turn.
+      for (const session of Object.values(task.sessions ?? {})) {
+        if (['dispatching', 'running'].includes(session.status)) session.status = 'interrupted';
+      }
+      this.record(task.id, 'interrupted', 'Queue paused: the owner has taken over. Retry the task and resume when ready.');
+      this.state.paused = true;
+    }
     if (error instanceof BillingGuardError) {
       this.record(null, 'billing-guard', 'Queue paused: fix the sign-in, then retry the task and resume.');
       this.state.paused = true;

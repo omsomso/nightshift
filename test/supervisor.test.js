@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Store } from '../src/store.js';
-import { Supervisor, BlockedError } from '../src/supervisor.js';
+import { Supervisor, BlockedError, InterruptedError } from '../src/supervisor.js';
 import { simulatedAdapter, simulatedReviewer } from '../src/adapters/simulated.js';
 
 function fixture(t, adapter = simulatedAdapter, reviewer = simulatedReviewer) {
@@ -110,4 +110,49 @@ test('dispatch cap bounds work even when more tasks are ready', async t => {
   const result = await supervisor.run({ maxDispatches: 1 });
   assert.equal(result.dispatched, 1);
   assert.deepEqual(result.state.tasks.map(x => x.status), ['done', 'ready']);
+});
+
+test('interrupt stops the running turn, blocks its task, and pauses the queue', async t => {
+  let started;
+  const running = new Promise(resolve => { started = resolve; });
+  const adapter = { execute: (item, { signal }) => new Promise((resolve, reject) => {
+    started();
+    signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+  }) };
+  const { supervisor } = fixture(t, adapter);
+  supervisor.add(task('a'));
+  supervisor.add(task('b'));
+  const tick = supervisor.tick();
+  await running;
+  supervisor.interrupt();
+  await tick;
+  const state = supervisor.snapshot();
+  assert.deepEqual(state.tasks.map(x => x.status), ['blocked', 'ready']);
+  assert.match(state.tasks[0].reason, /Interrupted by the owner/);
+  assert.equal(state.paused, true);
+  assert.deepEqual(state.events.filter(x => /interrupt/.test(x.type)).map(x => x.type), ['interrupt-requested', 'interrupted']);
+  assert.equal(await supervisor.tick(), false); // Paused: nothing else starts.
+});
+
+test('a result that arrives after an interrupt is discarded, not reviewed', async t => {
+  let release;
+  const adapter = { execute: item => new Promise(resolve => { release = () => resolve(simulatedAdapter.execute(item)); }) };
+  let reviewed = false;
+  const reviewer = { review: async () => { reviewed = true; return { passed: true, reason: 'x' }; } };
+  const { supervisor } = fixture(t, adapter, reviewer);
+  supervisor.add(task('a'));
+  const tick = supervisor.tick();
+  await new Promise(resolve => setImmediate(resolve));
+  supervisor.interrupt(); // This adapter ignores the signal and finishes anyway.
+  release();
+  await tick;
+  assert.equal(supervisor.snapshot().tasks[0].status, 'blocked');
+  assert.equal(reviewed, false);
+});
+
+test('an interrupt with nothing running is rejected and recorded', async t => {
+  const { store, supervisor } = fixture(t);
+  Store.enqueue(store.directory, 'interrupt');
+  await supervisor.tick();
+  assert.match(supervisor.snapshot().events.at(-1).detail, /interrupt: Nothing is running/);
 });
