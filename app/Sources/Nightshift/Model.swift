@@ -86,6 +86,34 @@ struct LastEvent: Decodable, Hashable {
 struct Config: Decodable {
     let node: String?
     let cli: String?
+    let disabledProviders: [String]?
+
+    static func load() -> Config? {
+        let file = CLI.homeDirectory.appendingPathComponent("config.json")
+        guard let data = try? Data(contentsOf: file) else { return nil }
+        return try? JSONDecoder().decode(Config.self, from: data)
+    }
+}
+
+// Worker:reviewer pairings, in the order the New Plan sheet offers them.
+struct AgentChoice: Identifiable, Hashable {
+    let spec: String
+    let label: String
+    var id: String { spec }
+    var providers: [String] { spec.split(separator: ":").map(String.init) }
+
+    static let all = [
+        AgentChoice(spec: "claude:codex", label: "Claude works, Codex reviews"),
+        AgentChoice(spec: "codex:claude", label: "Codex works, Claude reviews"),
+        AgentChoice(spec: "claude", label: "Claude only"),
+        AgentChoice(spec: "codex", label: "Codex only")
+    ]
+
+    // Only pairings whose providers are on (`node src/cli.js disable codex` turns one off).
+    static func available() -> [AgentChoice] {
+        let disabled = Set(Config.load()?.disabledProviders ?? [])
+        return all.filter { !$0.providers.contains(where: disabled.contains) }
+    }
 }
 
 enum CLIError: LocalizedError {

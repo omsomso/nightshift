@@ -45,6 +45,7 @@ Exit: one real task and follow-up run through each adapter without desktop click
 - [x] One-command run from a document (`run`), plan drafts, background runner, `list`, `merge`.
 - [x] SwiftUI macOS app over the CLI: plans, progress, controls, notifications (`app/`).
 - [x] Side-by-side comparison with a plain agent session (docs/COMPARISON.md).
+- [x] Per-provider on/off switch (`disable`/`enable`); Codex is off on the dev Mac for now.
 - [x] Planner reads project rules (AGENTS.md, CLAUDE.md) and includes the files they require in allowed paths (prompt-level; not yet re-run live).
 - [x] Final review judges only what the plan allows; a failed final phase becomes one bounded fix-up task (fixture-tested).
 
@@ -73,6 +74,6 @@ read-only runs have all passed review (see the setup docs). Edit mode completed 
 plans on a toy project (claude:codex and codex:claude; see docs/EDIT_MODE.md).
 Neither adapter has run on the owner's VM or accessed existing chats. Commands run from
 an agent sandbox may lack network access to OpenAI; run live checks from a normal terminal.
-Run `npm test` (111 tests) and `npm run demo` for the offline baseline. The live smoke
+Run `npm test` (112 tests) and `npm run demo` for the offline baseline. The live smoke
 commands are separate and can consume provider usage. Their version pins are operator
 checks, not declarations that a specific release has been certified.
