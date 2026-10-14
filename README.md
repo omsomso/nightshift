@@ -4,8 +4,9 @@ A personal, local-first workspace that keeps coding agents moving while you are 
 
 **Status: supervisor core plus initial Codex and Claude adapters.**
 Both adapters share one set of worker/reviewer prompts and are tested against
-subprocess fixtures. Either provider can be the worker or the reviewer. Neither has
-completed a live signed-in run yet. The web interface is not implemented.
+subprocess fixtures. Either provider can be the worker or the reviewer. Claude has
+completed one live, read-only worker/reviewer run; Codex has not run live yet.
+The web interface is not implemented.
 The default demo is simulated and does not call a model or spend API credits.
 
 ## Why

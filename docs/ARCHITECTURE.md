@@ -106,7 +106,9 @@ exist, nothing can prompt (`dontAsk`, `--permission-prompts none`), `--restricte
 confines file tools to the repository and skips settings-file hooks, and no MCP
 servers load. Denied tool requests in the final result become `approval-required`
 events and block the task. The result's cost, turn count, and usage are recorded as
-a `usage` event; `apiKeySource` from the init message records which sign-in paid.
+a `usage` event. Because the init message's `apiKeySource` reads `"none"` for
+subscription sign-ins, the paying account is recorded from `claude auth status`
+(method and plan only) as `project.claudeAuth`.
 
 Both adapters share `src/prompts.js` and `src/adapters/agent.js`, so worker and reviewer
 instructions are identical across providers. Any provider can review another's work.

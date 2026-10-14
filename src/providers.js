@@ -38,6 +38,16 @@ function checkedRuntime(name) {
   return { command, version: actual };
 }
 
+// Which account pays, for the record. Keeps only the method and plan; never email or org.
+// The stream's apiKeySource reports "none" for subscription sign-ins (observed with 2.1.296).
+function claudeAuth(command) {
+  try {
+    const status = JSON.parse(execFileSync(command, ['auth', 'status'], { encoding: 'utf8', timeout: 10_000, stdio: ['ignore', 'pipe', 'ignore'] }));
+    if (!status.loggedIn) return 'not signed in';
+    return [status.authMethod, status.subscriptionType].filter(Boolean).join(' ') || 'unknown';
+  } catch { return 'unknown'; }
+}
+
 export function gitRoot(repository) {
   const cwd = realpathSync(resolve(repository));
   execFileSync('git', ['-C', cwd, 'rev-parse', '--show-toplevel'], { stdio: ['ignore', 'pipe', 'pipe'] });
@@ -58,9 +68,10 @@ export function buildAgents(spec, repository) {
   const runtimes = Object.fromEntries([...new Set([pair.worker, pair.reviewer])].map(name => [name, checkedRuntime(name)]));
   const versions = Object.fromEntries(Object.entries(runtimes).map(([name, { version }]) => [`${name}Version`, version]));
   const build = (name, role) => providers[name][role](providers[name].options(cwd, runtimes[name].command));
-  const label = name => `${name} ${runtimes[name].version}`;
+  const auth = runtimes.claude ? { claudeAuth: claudeAuth(runtimes.claude.command) } : {};
+  const label = name => `${name} ${runtimes[name].version}${name === 'claude' ? ` [${auth.claudeAuth}]` : ''}`;
   return { worker: build(pair.worker, 'worker'), reviewer: build(pair.reviewer, 'reviewer'),
-    project: { cwd, pairing: pair.pairing, ...versions },
+    project: { cwd, pairing: pair.pairing, ...versions, ...auth },
     describe: `worker ${label(pair.worker)}, reviewer ${label(pair.reviewer)}. Read-only policy; model usage may be billed.` };
 }
 
