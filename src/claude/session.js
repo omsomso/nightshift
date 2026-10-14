@@ -15,22 +15,39 @@ export function subscriptionEnv(env = process.env) {
 // MCP servers and settings-file hooks are not loaded, and file tools stay inside cwd.
 export const readOnlyTools = ['Read', 'Grep', 'Glob'];
 
-export function claudeArgs({ sessionId, resume, outputSchema, model, maxBudgetUsd }) {
+// Edit mode (docs/EDIT_MODE.md): file tools stay inside the worktree (--restricted), and
+// shell commands run in the OS sandbox with writes limited to the worktree and temp, no
+// network, no unsandboxed fallback, and credential directories unreadable. Git history
+// commands are denied outright; Nightshift makes the commits.
+export const editTools = ['Read', 'Grep', 'Glob', 'Edit', 'Write', 'Bash'];
+export const editSettings = {
+  sandbox: {
+    enabled: true, failIfUnavailable: true, allowUnsandboxedCommands: false, autoAllowBashIfSandboxed: true,
+    network: { allowedDomains: [], strictAllowlist: true },
+    filesystem: { denyRead: ['~/.ssh', '~/.aws', '~/.gnupg', '~/.config/gh', '~/.codex', '~/.claude', '~/Library/Keychains'] }
+  },
+  permissions: { deny: ['WebFetch', 'WebSearch', ...['push', 'commit', 'remote', 'reset', 'rebase', 'merge', 'tag', 'worktree', 'config']
+    .map(sub => `Bash(git ${sub}:*)`)] }
+};
+
+export function claudeArgs({ sessionId, resume, outputSchema, model, maxBudgetUsd, edit = false }) {
+  const tools = edit ? editTools : readOnlyTools;
   return ['-p', '--output-format', 'stream-json', '--verbose',
     resume ? '--resume' : '--session-id', sessionId,
     '--json-schema', JSON.stringify(outputSchema),
-    '--tools', readOnlyTools.join(','), '--allowedTools', readOnlyTools.join(','),
+    '--tools', tools.join(','), '--allowedTools', tools.join(','),
     '--permission-mode', 'dontAsk', '--permission-prompts', 'none',
     '--restricted', '--strict-mcp-config',
+    ...(edit ? ['--settings', JSON.stringify(editSettings)] : []),
     ...(model ? ['--model', model] : []),
     ...(maxBudgetUsd ? ['--max-budget-usd', String(maxBudgetUsd)] : [])];
 }
 
 // One headless `claude -p` process per turn. The prompt goes over stdin, never argv.
 export class ClaudeSession {
-  constructor({ cwd, model, maxBudgetUsd, timeoutMs = 300_000, command = 'claude', baseArgs = [], maxLineBytes = 4_194_304 }) {
+  constructor({ cwd, model, maxBudgetUsd, timeoutMs = 300_000, command = 'claude', baseArgs = [], maxLineBytes = 4_194_304, edit = false }) {
     if (!cwd) throw new Error('A project directory is required.');
-    Object.assign(this, { cwd, model, maxBudgetUsd, timeoutMs, command, baseArgs, maxLineBytes });
+    Object.assign(this, { cwd, model, maxBudgetUsd, timeoutMs, command, baseArgs, maxLineBytes, edit });
   }
 
   async run({ prompt, session, outputSchema, onEvent = () => {}, signal }) {
@@ -43,7 +60,7 @@ export class ClaudeSession {
     emit({ type: 'dispatch-intent', threadId: sessionId });
 
     const child = spawn(this.command, [...this.baseArgs,
-      ...claudeArgs({ sessionId, resume, outputSchema, model: this.model, maxBudgetUsd: this.maxBudgetUsd })],
+      ...claudeArgs({ sessionId, resume, outputSchema, model: this.model, maxBudgetUsd: this.maxBudgetUsd, edit: this.edit })],
       { cwd: this.cwd, env: subscriptionEnv(), stdio: ['pipe', 'pipe', 'pipe'], shell: false });
     const closed = new Promise(resolve => child.once('close', resolve));
     const lines = new JsonlDecoder({ label: 'Claude stream', maxLineBytes: this.maxLineBytes });

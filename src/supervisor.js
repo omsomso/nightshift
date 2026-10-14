@@ -5,11 +5,17 @@ export class BillingGuardError extends BlockedError {}
 // The owner stopped the turn in flight and takes over from here.
 export class InterruptedError extends BlockedError {}
 
+const checkDigest = checks => checks.results.map(r =>
+  `$ ${r.command} -> exit ${r.timedOut ? 'timeout' : r.exitCode}\n${r.output}`).join('\n\n');
+
 export class Supervisor {
-  constructor(store, adapter, reviewer) {
+  // With a `workspace`, the supervisor runs a plan in edit mode (docs/EDIT_MODE.md):
+  // gates and checks before review, Nightshift-made commits, and plan-level limits.
+  constructor(store, adapter, reviewer, { workspace = null } = {}) {
     this.store = store;
     this.adapter = adapter;
     this.reviewer = reviewer;
+    this.workspace = workspace;
     this.state = store.read();
     this.busy = false;
     this.current = null; // { task, abort } while a dispatch is in flight
@@ -47,6 +53,15 @@ export class Supervisor {
 
   // Manual only: a person has reconciled the blocker and accepts any repeated effects.
   retry(id) {
+    const plan = this.state.plan;
+    if (plan && id === plan.id) {
+      if (plan.status !== 'blocked') throw new Error(`Plan ${id} is ${plan.status}, not blocked.`);
+      plan.status = 'running';
+      this.record(null, 'manual-retry', `Plan reopened. Previous blocker: ${plan.reason}`);
+      delete plan.reason;
+      this.store.save(this.state);
+      return;
+    }
     const task = this.state.tasks.find(candidate => candidate.id === id);
     if (!task) throw new Error(`Unknown task ${id}.`);
     if (task.status !== 'blocked') throw new Error(`Task ${id} is ${task.status}, not blocked.`);
@@ -79,12 +94,42 @@ export class Supervisor {
         else if (command.type === 'add-task') this.add(command.payload);
         else if (command.type === 'retry') this.retry(command.payload?.id);
         else if (command.type === 'interrupt') this.interrupt();
+        else if (command.type === 'limit') this.setLimit(command.payload?.name, command.payload?.value);
         else throw new Error('Unknown command.');
       } catch (error) {
         this.record(command.payload?.id ?? null, 'command-rejected', `${command.type}: ${error.message}`);
         this.store.save(this.state);
       }
     }
+  }
+
+  // The owner may raise or lower a plan limit, for example after one was reached.
+  setLimit(name, value) {
+    const limits = this.state.plan?.limits;
+    if (!limits) throw new Error('There is no plan.');
+    if (!(name in limits)) throw new Error(`Unknown limit ${name}.`);
+    if (!(Number(value) > 0)) throw new Error('A limit must be a positive number.');
+    limits[name] = Number(value);
+    if (this.workspace) this.workspace.limits = limits;
+    this.record(null, 'limit-changed', `${name} = ${value}`);
+    this.store.save(this.state);
+  }
+
+  // Plan-wide kill switches. Reaching one pauses the queue until the owner acts.
+  planLimitReached() {
+    const plan = this.state.plan;
+    if (!plan || plan.status !== 'running') return false;
+    const dispatches = this.state.events.filter(e => e.type === 'dispatched').length;
+    const tokens = this.state.events.filter(e => e.type === 'provider:usage')
+      .reduce((sum, e) => sum + (Number(e.detail?.tokens?.input) || 0) + (Number(e.detail?.tokens?.output) || 0), 0);
+    const hours = (Date.now() - Date.parse(plan.startedAt)) / 3_600_000;
+    const reached = dispatches >= plan.limits.dispatches ? `${dispatches} dispatches (limit ${plan.limits.dispatches})`
+      : tokens >= plan.limits.tokens ? `${tokens.toLocaleString('en-US')} tokens (limit ${plan.limits.tokens.toLocaleString('en-US')})`
+      : hours >= plan.limits.hours ? `${hours.toFixed(1)} hours (limit ${plan.limits.hours})` : null;
+    if (!reached) return false;
+    this.record(null, 'plan-limit', `Plan paused: ${reached}. Raise the limit with \`limit\`, then resume.`);
+    this.pause(true);
+    return true;
   }
 
   snapshot() { return structuredClone(this.state); }
@@ -115,13 +160,18 @@ export class Supervisor {
     if (this.busy) return false;
     this.applyCommands();
     if (this.state.paused) return false;
+    if (this.planLimitReached()) return false;
+    if (this.state.plan?.status !== undefined && this.state.plan.status !== 'running') return false;
     const task = this.state.tasks.find(candidate => candidate.status === 'ready' &&
       candidate.dependencies.every(id => this.state.tasks.some(other => other.id === id && other.status === 'done')));
-    if (!task) return false;
+    if (!task) {
+      if (this.workspace && this.state.tasks.every(t => t.status === 'done')) return this.finishPlan();
+      return false;
+    }
     this.busy = true;
     const abort = new AbortController();
     this.current = { task, abort };
-    const context = role => ({ onEvent: this.observer(task, role), signal: abort.signal });
+    const context = role => ({ onEvent: this.observer(task, role), signal: abort.signal, plan: this.state.plan });
     try {
       if (task.attempts >= task.maxAttempts) {
         task.status = 'blocked';
@@ -148,13 +198,25 @@ export class Supervisor {
         return true;
       }
       task.result = structuredClone(result);
+
+      let change = null;
+      if (this.workspace) {
+        try {
+          change = await this.verifyChange(task, abort.signal);
+          if (abort.signal.aborted) throw abort.signal.reason;
+        } catch (error) {
+          this.block(task, error);
+          return true;
+        }
+        if (!change) return true; // Sent back for repair, or blocked, by the gates or checks.
+      }
       task.status = 'review';
       this.record(task.id, 'review-requested', result.summary);
       this.store.save(this.state);
 
       let review;
       try {
-        review = await this.reviewer.review(structuredClone(task), structuredClone(result), context('reviewer'));
+        review = await this.reviewer.review(structuredClone(task), structuredClone(result), { ...context('reviewer'), change });
         if (abort.signal.aborted) throw abort.signal.reason;
         if (!review || typeof review.passed !== 'boolean' || typeof review.reason !== 'string' || !review.reason.trim()) {
           throw new BlockedError('Reviewer did not provide a valid decision and reason.');
@@ -165,10 +227,101 @@ export class Supervisor {
       }
       task.review = structuredClone(review);
       task.reason = review.reason;
+      if (review.passed && this.workspace) {
+        try {
+          task.commit = this.workspace.commit(task, this.state.plan.id);
+          this.record(task.id, 'committed', task.commit);
+        } catch (error) {
+          this.block(task, error);
+          return true;
+        }
+      }
       task.status = review.passed ? 'done' : task.attempts < task.maxAttempts ? 'ready' : 'blocked';
       this.record(task.id, review.passed ? 'verified' : 'review-failed', review.reason);
       this.store.save(this.state);
       return true;
+    } finally {
+      this.busy = false;
+      this.current = null;
+    }
+  }
+
+  // Gates, then checks, both deterministic. Returns the change for review, or null after
+  // sending the task back for repair (or blocking it). Throws only on unexpected failures.
+  async verifyChange(task, signal) {
+    const change = this.workspace.inspect();
+    const gate = this.workspace.gate(change);
+    this.record(task.id, 'change-inspected', { files: change.files.map(f => f.path), changedLines: change.changedLines, gate: gate.verdict });
+    this.store.save(this.state);
+    if (gate.verdict === 'block') {
+      this.block(task, new BlockedError(gate.reason));
+      return null;
+    }
+    const checks = gate.verdict === 'ok' ? await this.workspace.runChecks({ signal }) : { passed: false, results: [] };
+    if (signal.aborted) throw signal.reason;
+    if (gate.verdict === 'ok') {
+      this.record(task.id, 'checks', { passed: checks.passed, results: checks.results });
+      this.store.save(this.state);
+    }
+    if (gate.verdict === 'ok' && checks.passed) return { ...change, checks };
+    const reason = gate.verdict === 'repair' ? gate.reason : `The plan's checks failed:\n${checkDigest(checks)}`;
+    const fingerprint = this.workspace.constructor.fingerprint(change, checks);
+    if (task.lastFailure === fingerprint) {
+      this.block(task, new BlockedError(`Stagnation: the same change failed the same way twice. Last failure: ${reason.slice(0, 2000)}`));
+      return null;
+    }
+    task.lastFailure = fingerprint;
+    task.review = { passed: false, reason };
+    task.reason = reason;
+    task.status = task.attempts < task.maxAttempts ? 'ready' : 'blocked';
+    this.record(task.id, 'checks-failed', reason.slice(0, 4000));
+    this.store.save(this.state);
+    return null;
+  }
+
+  // After the last task: clean tree, full checks, then a final review of the whole plan.
+  async finishPlan() {
+    const plan = this.state.plan;
+    plan.final ??= { id: `${plan.id}:final` };
+    const abort = new AbortController();
+    this.busy = true;
+    this.current = { task: plan.final, abort };
+    const stop = (reason, status = 'blocked') => {
+      plan.status = status;
+      plan.reason = reason;
+      this.record(null, 'plan-blocked', reason);
+      this.state.paused = true;
+      this.store.save(this.state);
+      return true;
+    };
+    try {
+      if (!this.workspace.clean()) return stop('Uncommitted changes remain after the last task.');
+      this.record(null, 'final-checks-started', plan.checks.join('; '));
+      this.store.save(this.state);
+      const checks = await this.workspace.runChecks({ signal: abort.signal });
+      if (abort.signal.aborted) throw abort.signal.reason;
+      this.record(null, 'final-checks', { passed: checks.passed, results: checks.results });
+      if (!checks.passed) return stop(`Final checks failed:\n${checkDigest(checks).slice(0, 4000)}`);
+      const planChange = this.workspace.planDiff();
+      const commits = this.state.tasks.map(t => `${t.commit?.slice(0, 12)} ${t.title}`);
+      const review = await this.reviewer.review({ id: plan.final.id, title: `Whole plan: ${plan.id}`, acceptance: plan.brief },
+        { summary: `All ${plan.tasks.length} tasks committed`, evidence: commits },
+        { onEvent: this.observer(plan.final, 'reviewer'), signal: abort.signal, plan, change: { planChange, checks }, final: true });
+      if (abort.signal.aborted) throw abort.signal.reason;
+      if (!review || typeof review.passed !== 'boolean' || typeof review.reason !== 'string' || !review.reason.trim()) {
+        return stop('Final reviewer did not provide a valid decision and reason.');
+      }
+      plan.final.review = review;
+      if (!review.passed) return stop(`Final review failed: ${review.reason}`);
+      plan.status = 'awaiting-approval';
+      plan.finishedAt = new Date().toISOString();
+      this.record(null, 'plan-ready', `Branch ${this.workspace.branch} awaits the owner's merge (${planChange.stat}).`);
+      this.store.save(this.state);
+      return true;
+    } catch (error) {
+      // An interrupt leaves the plan running but paused; anything else blocks it.
+      if (error instanceof InterruptedError) return stop(error.message, 'running');
+      return stop(`Final phase failed: ${error.message ?? String(error)}`);
     } finally {
       this.busy = false;
       this.current = null;

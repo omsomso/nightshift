@@ -10,14 +10,14 @@ import { subscriptionEnv } from './claude/session.js';
 const providers = {
   codex: {
     env: 'CODEX', command: 'codex',
-    options: (cwd, command) => ({ cwd, model: process.env.NIGHTSHIFT_CODEX_MODEL || undefined,
-      createClient: () => createAppServer({ command, cwd }) }),
+    options: (cwd, command, extra) => ({ cwd, model: process.env.NIGHTSHIFT_CODEX_MODEL || undefined,
+      createClient: () => createAppServer({ command, cwd }), ...extra }),
     worker: options => new CodexAdapter(options), reviewer: options => new CodexReviewer(options)
   },
   claude: {
     env: 'CLAUDE', command: 'claude',
-    options: (cwd, command) => ({ cwd, command, model: process.env.NIGHTSHIFT_CLAUDE_MODEL || undefined,
-      maxBudgetUsd: process.env.NIGHTSHIFT_CLAUDE_MAX_BUDGET_USD || '2' }),
+    options: (cwd, command, extra) => ({ cwd, command, model: process.env.NIGHTSHIFT_CLAUDE_MODEL || undefined,
+      maxBudgetUsd: process.env.NIGHTSHIFT_CLAUDE_MAX_BUDGET_USD || (extra.edit ? '10' : '2'), ...extra }),
     worker: options => new ClaudeAdapter(options), reviewer: options => new ClaudeReviewer(options)
   }
 };
@@ -75,7 +75,9 @@ export function gitRoot(repository) {
 }
 
 // Builds a version-checked worker/reviewer pair. `project` describes what state must match.
-export function buildAgents(spec, repository) {
+// With `edit` ({ worktree, turnMinutes }), both run in the worktree: the worker with
+// sandboxed write access, the reviewer read-only.
+export function buildAgents(spec, repository, { edit = null } = {}) {
   if (spec === 'simulated') {
     return { worker: simulatedAdapter, reviewer: simulatedReviewer,
       project: { pairing: 'simulated', ...(repository ? { cwd: gitRoot(repository) } : {}) },
@@ -87,13 +89,15 @@ export function buildAgents(spec, repository) {
   const cwd = gitRoot(repository);
   const runtimes = Object.fromEntries([...new Set([pair.worker, pair.reviewer])].map(name => [name, checkedRuntime(name)]));
   const versions = Object.fromEntries(Object.entries(runtimes).map(([name, { version }]) => [`${name}Version`, version]));
-  const build = (name, role) => providers[name][role](providers[name].options(cwd, runtimes[name].command));
+  const build = (name, role) => providers[name][role](providers[name].options(edit ? edit.worktree : cwd, runtimes[name].command,
+    edit ? { edit: role === 'worker', timeoutMs: edit.turnMinutes * 60_000 } : {}));
   const auth = { ...(runtimes.claude ? { claudeAuth: requireSubscription(runtimes.claude.command) } : {}),
     ...(runtimes.codex ? { codexAuth: requireChatgpt(runtimes.codex.command) } : {}) };
   const label = name => `${name} ${runtimes[name].version} [${auth[`${name}Auth`]}]`;
   return { worker: build(pair.worker, 'worker'), reviewer: build(pair.reviewer, 'reviewer'),
     project: { cwd, pairing: pair.pairing, ...versions, ...auth },
-    describe: `worker ${label(pair.worker)}, reviewer ${label(pair.reviewer)}. Read-only policy; model usage may be billed.` };
+    describe: `worker ${label(pair.worker)}, reviewer ${label(pair.reviewer)}. ` +
+      (edit ? `Edit mode in ${edit.worktree}: sandboxed writes, no network.` : 'Read-only policy; model usage may be billed.') };
 }
 
 // State is tied to one repository, pairing, and set of pinned versions.

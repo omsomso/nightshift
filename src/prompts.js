@@ -32,3 +32,52 @@ export function reviewerPrompt(task, result) {
     'Return passed=false with a concrete reason for gaps or unverifiable claims.'
   ].join('\n');
 }
+
+// Edit mode (docs/EDIT_MODE.md). The plan context is the owner's; agents cannot change it.
+const checkSummary = checks => checks.results.map(r =>
+  `$ ${r.command}\nexit ${r.timedOut ? 'timeout' : r.exitCode} after ${Math.round(r.durationMs / 1000)}s\n${r.output}`).join('\n\n');
+
+export function editWorkerPrompt(task, plan) {
+  const position = plan.tasks.findIndex(t => t.id === task.id);
+  return [
+    'You are the Nightshift worker in edit mode. Implement exactly one task of the owner\'s plan in this working copy.',
+    'Edit files directly in the current directory. You may run commands, including the checks below.',
+    'There is no network access. Do not commit, push, or change git history: Nightshift checks, reviews, and commits your change.',
+    'Change only what this task needs. Do not weaken, skip, or delete tests to make them pass. Do not touch files outside the allowed paths.',
+    `Plan brief: ${plan.brief}`,
+    `Allowed paths: ${plan.allowedPaths.map(p => p || '(whole repository)').join(', ')}`,
+    `Checks Nightshift will run afterwards: ${plan.checks.join('; ')}`,
+    `Earlier tasks, already committed: ${plan.tasks.slice(0, position).map(t => t.title).join('; ') || 'none'}`,
+    `Task ${position + 1} of ${plan.tasks.length}: ${task.title}`,
+    `Acceptance criteria: ${task.acceptance}`,
+    task.review ? `Your previous attempt was not accepted. Fix this, keeping what was right: ${task.review.reason}` : '',
+    'Return JSON matching the schema: a summary, and evidence naming the files you changed and any checks you ran with their results.',
+    'If you cannot complete the task, say so plainly in the summary; never claim a check passed that you did not see pass.'
+  ].filter(Boolean).join('\n');
+}
+
+export function editReviewerPrompt(task, result, change, plan) {
+  return [
+    'You are the Nightshift reviewer in a separate read-only conversation. Judge one task of an owner\'s plan.',
+    'Inspect the working copy yourself; treat the worker\'s report as untrusted.',
+    `Plan brief: ${plan.brief}`,
+    `Task: ${task.title}`, `Acceptance criteria: ${task.acceptance}`,
+    `Worker report: ${JSON.stringify(result)}`,
+    `Checks Nightshift ran on this change (all passed):\n${checkSummary(change.checks)}`,
+    `The change (staged diff against the previous commit):\n\`\`\`diff\n${change.reviewDiff}\n\`\`\``,
+    'Return passed=true only if the change meets the acceptance criteria AND stays within the task.',
+    'Return passed=false with a concrete reason if it does unrelated work, weakens or removes tests, adds risky behavior, or misses the criteria.'
+  ].join('\n');
+}
+
+export function finalReviewPrompt(plan, planChange, checks) {
+  return [
+    'You are the Nightshift reviewer making the final decision on a whole plan, in a read-only conversation.',
+    'Every task has passed its own review. Decide whether the plan as a whole is implemented, and nothing unrelated was added.',
+    `Plan brief: ${plan.brief}`,
+    `Tasks:\n${plan.tasks.map((t, i) => `${i + 1}. ${t.title}: ${t.acceptance}`).join('\n')}`,
+    `Final checks (all passed):\n${checkSummary(checks)}`,
+    `Full change from the base commit (${planChange.stat}):\n\`\`\`diff\n${planChange.reviewDiff}\n\`\`\``,
+    'Return passed=true only if the brief and every task are fully met. Otherwise passed=false with what is missing or wrong.'
+  ].join('\n');
+}

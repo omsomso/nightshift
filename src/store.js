@@ -44,7 +44,7 @@ function pidAlive(pid) {
 function load(db) {
   const meta = Object.fromEntries(db.prepare('SELECT key, value FROM meta').all().map(row => [row.key, JSON.parse(row.value)]));
   return {
-    version: 1, paused: meta.paused ?? false, ...(meta.project ? { project: meta.project } : {}),
+    version: 1, paused: meta.paused ?? false, ...(meta.project ? { project: meta.project } : {}), ...(meta.plan ? { plan: meta.plan } : {}),
     tasks: db.prepare('SELECT data FROM tasks ORDER BY position').all().map(row => JSON.parse(row.data)),
     events: db.prepare('SELECT task_id, type, detail, at FROM events ORDER BY seq').all()
       .map(row => ({ taskId: row.task_id, type: row.type, detail: JSON.parse(row.detail), at: row.at }))
@@ -162,6 +162,7 @@ export class Store {
       const meta = this.db.prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)');
       meta.run('paused', JSON.stringify(Boolean(state.paused)));
       if (state.project) meta.run('project', JSON.stringify(state.project));
+      if (state.plan) meta.run('plan', JSON.stringify(state.plan));
       const task = this.db.prepare('INSERT OR REPLACE INTO tasks (id, position, status, data) VALUES (?, ?, ?, ?)');
       state.tasks.forEach((item, index) => task.run(item.id, index, item.status, JSON.stringify(item)));
       const event = this.db.prepare('INSERT INTO events (task_id, type, detail, at) VALUES (?, ?, ?, ?)');

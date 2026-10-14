@@ -53,8 +53,15 @@ restarts until you resume. Ctrl-C or SIGTERM stops after the current step. See
 The core supports dependency ordering, persisted attempt limits, independent review
 before completion, continuing past blocked tasks, and conservative recovery of
 interrupted work. State lives in SQLite with an append-only event log. One runner
-holds an expiring lease, and every write checks it. Live provider runs are still
-read-only inspections; workspace writes come later.
+holds an expiring lease, and every write checks it.
+
+## Edit mode
+
+Give Nightshift a plan (a brief, ordered tasks, and the check commands) and it works
+through it in its own git worktree: the agent edits inside an OS sandbox with no
+network, Nightshift runs the checks and gates, a separate reviewer judges each change,
+and Nightshift commits it. When every task and a final review pass, the branch waits
+for you to merge. See `docs/EDIT_MODE.md`.
 
 ## Project map
 
@@ -65,6 +72,7 @@ read-only inspections; workspace writes come later.
 - `src/store.js`: SQLite state, append-only events, runner lease, and command queue.
 - `src/cli.js`: demo, status, serve, add, pause, resume, retry, and report commands.
 - `src/report.js`: morning report rendering.
+- `src/plan.js`, `src/workspace.js`: edit-mode plans, worktrees, checks, gates, and commits.
 - `src/providers.js`: version-checked provider setup shared by `serve` and `smoke`.
 - `src/prompts.js`: provider-neutral worker/reviewer prompts and result schemas.
 - `src/adapters/`: simulated, Codex, and Claude workers and reviewers (`agent.js` is shared).
@@ -77,6 +85,7 @@ read-only inspections; workspace writes come later.
 - `docs/SERVICE.md`: running `serve` under launchd (macOS) or systemd (Linux).
 - `test/supervisor.test.js`: behavioral checks for unattended execution.
 - `test/service.test.js`: store, lease, command, serve-loop, and report tests.
+- `test/edit.test.js`: edit-mode cycle, gates, limits, final review, and serve end to end.
 - `test/codex.test.js`, `test/claude.test.js`: subprocess protocol and persisted session tests.
 
 ## Next milestone

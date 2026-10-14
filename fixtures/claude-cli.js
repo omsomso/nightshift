@@ -1,5 +1,6 @@
 // A `claude -p` stream fixture, not a model or an alternative Claude runtime.
 import { randomUUID } from 'node:crypto';
+import { mkdirSync, writeFileSync } from 'node:fs';
 
 const [mode = 'normal', ...flags] = process.argv.slice(2);
 const value = name => { const index = flags.indexOf(name); return index >= 0 ? flags[index + 1] : undefined; };
@@ -15,14 +16,21 @@ let input = '';
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', chunk => { input += chunk; });
 process.stdin.on('end', () => {
-  const readOnly = has('-p') && value('--output-format') === 'stream-json' && value('--tools') === 'Read,Grep,Glob' &&
+  const base = has('-p') && value('--output-format') === 'stream-json' &&
     value('--permission-mode') === 'dontAsk' && value('--permission-prompts') === 'none' &&
     has('--restricted') && has('--strict-mcp-config');
-  if (!readOnly) return fail('Expected read-only policy');
+  const settings = value('--settings') ? JSON.parse(value('--settings')) : null;
+  const sandbox = settings?.sandbox;
+  const editMode = value('--tools') === 'Read,Grep,Glob,Edit,Write,Bash' && sandbox?.enabled === true &&
+    sandbox.failIfUnavailable === true && sandbox.allowUnsandboxedCommands === false &&
+    sandbox.network?.allowedDomains?.length === 0 && sandbox.network.strictAllowlist === true &&
+    settings.permissions?.deny?.includes('Bash(git push:*)');
+  const readOnly = value('--tools') === 'Read,Grep,Glob' && !settings;
+  if (!base || !(readOnly || editMode)) return fail('Expected read-only policy or the sandboxed edit policy');
   const leaked = Object.keys(process.env).filter(name => name.startsWith('ANTHROPIC_') || name.startsWith('CLAUDE_CODE_USE_'));
   if (leaked.length) return fail(`Billing variables leaked: ${leaked.join(', ')}`);
   if (!sessionId) return fail('Expected a session ID');
-  if (!input.includes('Task:')) return fail('Expected the prompt on stdin');
+  if (!/Task/.test(input)) return fail('Expected the prompt on stdin');
   if (mode === 'malformed') return process.stdout.write('this is not JSON\n');
   if (mode === 'oversize') return process.stdout.write('x'.repeat(5000));
   if (mode === 'disconnect') return process.exit(3);
@@ -33,6 +41,12 @@ process.stdin.on('end', () => {
     resumed: has('--resume') });
   if (mode === 'stall' || mode === 'api-key') return setInterval(() => {}, 1000); // api-key: must be killed, not awaited
   const isReview = JSON.parse(value('--json-schema')).required.includes('passed');
+  // An edit-mode worker changes one file per task, as a real agent would.
+  if (editMode && !isReview) {
+    const n = /Task (\d+) of/.exec(input)?.[1] ?? 'x';
+    mkdirSync('notes', { recursive: true });
+    writeFileSync(`notes/task-${n}.txt`, `${process.env.FIXTURE_EDIT_CONTENT ?? 'done'} by claude fixture\n`);
+  }
   const result = isReview ? { passed: true, reason: 'Fixture review only.' }
     : { summary: 'Fixture résumé 🦉', evidence: ['fixture:README.md'] };
   // An unrelated session's result must not complete this turn.

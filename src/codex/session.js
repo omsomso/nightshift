@@ -13,7 +13,9 @@ export function createAppServer({ command = 'codex', baseArgs = [], cwd, ...opti
 }
 
 export class CodexSession {
-  constructor({ cwd, model, timeoutMs = 300_000, createClient = () => createAppServer({ cwd }) }) {
+  // edit: workspace-write sandbox (the worktree, plus temp) with no network; otherwise read-only.
+  constructor({ cwd, model, timeoutMs = 300_000, createClient = () => createAppServer({ cwd }), edit = false }) {
+    this.edit = edit;
     if (!cwd) throw new Error('A project directory is required.');
     this.cwd = cwd;
     this.model = model;
@@ -52,7 +54,7 @@ export class CodexSession {
       // "never" means Codex never asks: the read-only sandbox refuses writes and network
       // and reports the failure to the model. Nothing is approved. Values follow the
       // schema generated from codex-cli 0.162.1.
-      const params = { cwd: this.cwd, sandbox: 'read-only', approvalPolicy: 'never', modelProvider: 'openai',
+      const params = { cwd: this.cwd, sandbox: this.edit ? 'workspace-write' : 'read-only', approvalPolicy: 'never', modelProvider: 'openai',
         ...(this.model ? { model: this.model } : {}) };
       const opened = session?.threadId
         ? await client.request('thread/resume', { ...params, threadId: session.threadId, excludeTurns: true })
@@ -157,7 +159,8 @@ export class CodexSession {
       emit({ type: 'dispatch-intent', threadId });
       const started = await Promise.race([client.request('turn/start', {
         threadId, input: [{ type: 'text', text: prompt }],
-        cwd: this.cwd, approvalPolicy: 'never', sandboxPolicy: { type: 'readOnly' }, outputSchema
+        cwd: this.cwd, approvalPolicy: 'never', outputSchema,
+        sandboxPolicy: this.edit ? { type: 'workspaceWrite', writableRoots: [], networkAccess: false } : { type: 'readOnly' }
       }), completion]);
       turnId = started?.turn?.id;
       if (!turnId) throw new Error('Codex returned no turn ID; dispatch outcome is uncertain.');
