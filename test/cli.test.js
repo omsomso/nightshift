@@ -7,6 +7,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Store } from '../src/store.js';
+import { renderReport } from '../src/report.js';
 
 const cliFile = fileURLToPath(new URL('../src/cli.js', import.meta.url));
 const git = (cwd, ...args) => execFileSync('git', ['-C', cwd, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', ...args],
@@ -146,4 +147,20 @@ test('list shows the running or reviewed task of each plan', t => {
   assert.equal(after('busy'), '  now: Write note one');
   assert.equal(after('checking'), '  now: Write note two');
   assert.equal(lines.filter(line => line.includes('now:')).length, 2, 'drafts and idle plans have no now line');
+});
+
+test('the plan section of the report lists every task with attempts and latest checks', () => {
+  const at = '2026-10-15T06:00:00.000Z';
+  const task = (id, status, attempts) => ({ id, title: `Task ${id}`, status, attempts, dependencies: [] });
+  const state = { version: 1, paused: false, plan: { id: 'p', status: 'running', branch: 'nightshift/p', baseCommit: 'abcdef1234567890',
+    repo: '/repo', worktree: '/wt', startedAt: at, limits: { dispatches: 10, tokens: 1000, hours: 6 } },
+  tasks: [task('a', 'done', 2), task('b', 'ready', 1), task('c', 'ready', 0)], events: [
+    { taskId: 'a', type: 'checks', detail: { passed: false, results: [] }, at },
+    { taskId: 'b', type: 'checks', detail: { passed: false, results: [] }, at },
+    { taskId: 'a', type: 'checks', detail: { passed: true, results: [] }, at }
+  ] };
+  const report = renderReport(state, { now: new Date(at) });
+  assert.match(report, /Tasks:\n- \*\*Task a\*\* \(`a`\) — done; 2 attempt\(s\); checks passed\n/);
+  assert.match(report, /\(`b`\) — ready; 1 attempt\(s\); checks failed\n/);
+  assert.match(report, /\(`c`\) — ready; 0 attempt\(s\); no checks yet\n/);
 });
