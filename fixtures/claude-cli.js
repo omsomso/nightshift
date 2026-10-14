@@ -19,6 +19,8 @@ process.stdin.on('end', () => {
     value('--permission-mode') === 'dontAsk' && value('--permission-prompts') === 'none' &&
     has('--restricted') && has('--strict-mcp-config');
   if (!readOnly) return fail('Expected read-only policy');
+  const leaked = Object.keys(process.env).filter(name => name.startsWith('ANTHROPIC_') || name.startsWith('CLAUDE_CODE_USE_'));
+  if (leaked.length) return fail(`Billing variables leaked: ${leaked.join(', ')}`);
   if (!sessionId) return fail('Expected a session ID');
   if (!input.includes('Task:')) return fail('Expected the prompt on stdin');
   if (mode === 'malformed') return process.stdout.write('this is not JSON\n');
@@ -27,9 +29,9 @@ process.stdin.on('end', () => {
 
   const ids = { session_id: sessionId };
   send({ type: 'system', subtype: 'init', session_id: mode === 'wrong-session' ? randomUUID() : sessionId, uuid: randomUUID(),
-    model: 'fixture-model', permissionMode: 'dontAsk', apiKeySource: 'none', tools: ['Read', 'Grep', 'Glob'],
+    model: 'fixture-model', permissionMode: 'dontAsk', apiKeySource: mode === 'api-key' ? 'ANTHROPIC_API_KEY' : 'none', tools: ['Read', 'Grep', 'Glob'],
     resumed: has('--resume') });
-  if (mode === 'stall') return setInterval(() => {}, 1000);
+  if (mode === 'stall' || mode === 'api-key') return setInterval(() => {}, 1000); // api-key: must be killed, not awaited
   const isReview = JSON.parse(value('--json-schema')).required.includes('passed');
   const result = isReview ? { passed: true, reason: 'Fixture review only.' }
     : { summary: 'Fixture résumé 🦉', evidence: ['fixture:README.md'] };

@@ -5,6 +5,7 @@ import { CodexAdapter, CodexReviewer } from './adapters/codex.js';
 import { ClaudeAdapter, ClaudeReviewer } from './adapters/claude.js';
 import { simulatedAdapter, simulatedReviewer } from './adapters/simulated.js';
 import { RpcClient } from './codex/rpc-client.js';
+import { subscriptionEnv } from './claude/session.js';
 
 const providers = {
   codex: {
@@ -38,14 +39,23 @@ function checkedRuntime(name) {
   return { command, version: actual };
 }
 
-// Which account pays, for the record. Keeps only the method and plan; never email or org.
-// The stream's apiKeySource reports "none" for subscription sign-ins (observed with 2.1.296).
-function claudeAuth(command) {
+// Subscription-only billing: refuse to start unless the CLI, seeing the same stripped
+// environment its turns will get, reports a claude.ai sign-in. Records only method and plan.
+function requireSubscription(command) {
+  let text;
   try {
-    const status = JSON.parse(execFileSync(command, ['auth', 'status'], { encoding: 'utf8', timeout: 10_000, stdio: ['ignore', 'pipe', 'ignore'] }));
-    if (!status.loggedIn) return 'not signed in';
-    return [status.authMethod, status.subscriptionType].filter(Boolean).join(' ') || 'unknown';
-  } catch { return 'unknown'; }
+    text = execFileSync(command, ['auth', 'status'], { encoding: 'utf8', timeout: 10_000,
+      env: subscriptionEnv(), stdio: ['ignore', 'pipe', 'ignore'] });
+  } catch (error) { text = error.stdout; } // A signed-out CLI may exit non-zero but still print status.
+  let status;
+  try { status = JSON.parse(text); }
+  catch { throw new Error('Could not read `claude auth status`; refusing to run without a confirmed subscription sign-in.'); }
+  if (!status.loggedIn) throw new Error('The Claude CLI is not signed in. Run `claude auth login` with your claude.ai account.');
+  if (status.authMethod !== 'claude.ai') {
+    throw new Error(`The Claude CLI is signed in with ${status.authMethod ?? 'an unknown method'}, not a claude.ai subscription. ` +
+      'Nightshift refuses pay-per-token billing; run `claude auth login` with your claude.ai account.');
+  }
+  return [status.authMethod, status.subscriptionType].filter(Boolean).join(' ');
 }
 
 export function gitRoot(repository) {
@@ -68,7 +78,7 @@ export function buildAgents(spec, repository) {
   const runtimes = Object.fromEntries([...new Set([pair.worker, pair.reviewer])].map(name => [name, checkedRuntime(name)]));
   const versions = Object.fromEntries(Object.entries(runtimes).map(([name, { version }]) => [`${name}Version`, version]));
   const build = (name, role) => providers[name][role](providers[name].options(cwd, runtimes[name].command));
-  const auth = runtimes.claude ? { claudeAuth: claudeAuth(runtimes.claude.command) } : {};
+  const auth = runtimes.claude ? { claudeAuth: requireSubscription(runtimes.claude.command) } : {};
   const label = name => `${name} ${runtimes[name].version}${name === 'claude' ? ` [${auth.claudeAuth}]` : ''}`;
   return { worker: build(pair.worker, 'worker'), reviewer: build(pair.reviewer, 'reviewer'),
     project: { cwd, pairing: pair.pairing, ...versions, ...auth },

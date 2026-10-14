@@ -110,6 +110,12 @@ a `usage` event. Because the init message's `apiKeySource` reads `"none"` for
 subscription sign-ins, the paying account is recorded from `claude auth status`
 (method and plan only) as `project.claudeAuth`.
 
+Billing is subscription-only by construction: `subscriptionEnv()` removes every
+`ANTHROPIC_*` and `CLAUDE_CODE_USE_*` variable from each child process, startup refuses
+any sign-in other than `claude.ai`, and a turn whose init reports an API-key source is
+killed with a `BillingGuardError`. The supervisor treats that error as affecting every
+task: it blocks the task and pauses the queue. No configuration switch disables this.
+
 Both adapters share `src/prompts.js` and `src/adapters/agent.js`, so worker and reviewer
 instructions are identical across providers. Any provider can review another's work.
 A saved session is never resumed by a different provider. See `docs/CLAUDE_SETUP.md`

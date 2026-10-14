@@ -21,6 +21,8 @@
 - [x] Real `claude` 2.1.296 accepts the read-only flag set and stream shape (unsigned probe only).
 - [x] Sign the Claude CLI in and run `npm run claude:smoke` once (2026-10-14, dev Mac, passed).
 - [ ] Exercise a Claude review failure and resumed repair turn on a real run.
+- [x] Subscription-only Claude billing guard: stripped env, startup sign-in check, per-turn kill (live-checked).
+- [ ] Equivalent Codex guard (strip `OPENAI_API_KEY`, require a ChatGPT sign-in) once Codex is installed.
 - [ ] Run one mixed pairing (`npm run smoke -- codex:claude`).
 
 Exit: one real task and follow-up run through each adapter without desktop clicks.
@@ -61,6 +63,6 @@ protocol subsets. No Codex executable is installed in the development workspace.
 The Claude adapter completed one signed-in, read-only worker/reviewer run on the
 development Mac (see docs/CLAUDE_SETUP.md); it has not edited files. Neither adapter
 has run on the owner's VM or accessed existing chats.
-Run `npm test` (59 tests) and `npm run demo` for the offline baseline. The live smoke
+Run `npm test` (64 tests) and `npm run demo` for the offline baseline. The live smoke
 commands are separate and can consume provider usage. Their version pins are operator
 checks, not declarations that a specific release has been certified.
