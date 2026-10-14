@@ -64,9 +64,13 @@ test('logs prints the tail of a plan runner log and rejects unknown plans', t =>
 });
 
 // Edits a plan's saved state directly, as a runner or a merge would have.
-function patchState(dir, { plan, lease } = {}) {
+function patchState(dir, { plan, lease, task } = {}) {
   const db = new DatabaseSync(join(dir, 'nightshift.db'));
   try {
+    if (task) {
+      const current = JSON.parse(db.prepare('SELECT data FROM tasks WHERE id = ?').get(task.id).data);
+      db.prepare('UPDATE tasks SET status = ?, data = ? WHERE id = ?').run(task.status ?? current.status, JSON.stringify({ ...current, ...task }), task.id);
+    }
     if (plan) {
       const current = JSON.parse(db.prepare("SELECT value FROM meta WHERE key = 'plan'").get().value);
       db.prepare("UPDATE meta SET value = ? WHERE key = 'plan'").run(JSON.stringify({ ...current, ...plan }));
@@ -126,4 +130,20 @@ test('limit rejects unknown names at once and queues known ones', t => {
   assert.equal(Store.inspect(dir).pendingCommands, 0, 'nothing was queued');
   assert.match(e.cli('limit', 'tokens', '8000000', '--plan', 'limits'), /Queued limit/);
   assert.equal(Store.inspect(dir).pendingCommands, 1);
+});
+
+test('list shows the running or reviewed task of each plan', t => {
+  const e = setupEnv(t);
+  e.draft('idea');
+  const tasks = [{ id: 'one', title: 'Write note one', acceptance: 'x' }, { id: 'two', title: 'Write note two', acceptance: 'x' }];
+  const busy = e.startedPlan('busy', { tasks });
+  const checking = e.startedPlan('checking', { tasks });
+  e.startedPlan('waiting', { tasks });
+  patchState(busy, { task: { id: 'one', status: 'running' } });
+  patchState(checking, { task: { id: 'two', status: 'review' } });
+  const lines = e.cli('list').trimEnd().split('\n');
+  const after = id => lines[lines.findIndex(line => line.startsWith(`${id} `)) + 1];
+  assert.equal(after('busy'), '  now: Write note one');
+  assert.equal(after('checking'), '  now: Write note two');
+  assert.equal(lines.filter(line => line.includes('now:')).length, 2, 'drafts and idle plans have no now line');
 });
