@@ -1,11 +1,12 @@
-import { resolve } from 'node:path';
+import { resolve, join } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
 import { parseArgs } from 'node:util';
 import { Store } from './store.js';
 import { Supervisor } from './supervisor.js';
 import { simulatedAdapter, simulatedReviewer } from './adapters/simulated.js';
 import { buildAgents, checkProject } from './providers.js';
 import { renderReport } from './report.js';
-import { loadPlan } from './plan.js';
+import { loadPlan, defaultLimits } from './plan.js';
 import { Workspace } from './workspace.js';
 import { execFileSync } from 'node:child_process';
 import { createInterface } from 'node:readline/promises';
@@ -13,16 +14,19 @@ import { fileURLToPath } from 'node:url';
 import { buildPlanner, providerNames, installedVersion, providerCommand, requireSubscription, requireChatgpt } from './providers.js';
 import { draftPlan } from './planner.js';
 import { home, planDir, readConfig, writeConfig, freePlanId } from './home.js';
-import { createPlan, saveDraft, startPlan, stopRunner, mergePlan, summarize, listPlans } from './plans.js';
+import { createPlan, saveDraft, startPlan, stopRunner, mergePlan, discardPlan, summarize, listPlans } from './plans.js';
 
 const usage = `Usage: node src/cli.js <command> [options]
 
   setup                        Record the installed Claude/Codex versions and check sign-ins
   run <doc> [--steps s]        Draft a plan from a document, ask once, then run it in the background
-        [--repo path] [--agents claude:codex] [--request text] [--yes]
+        [--repo path] [--agents claude:codex] [--request text] [--base ref] [--yes]
+                               --base: start the plan's worktree from this commit instead of HEAD
   draft <doc> [same options]   Only draft the plan (review it, then \`start <id>\`)
   start <id> | stop <id>       Start or stop a plan's background runner
   list [--json]                All plans in ~/.nightshift/plans with progress
+  logs <id> [--lines n]        Print the last n lines (default 40) of a plan's runner log
+  discard <id> --yes           Remove an unmerged plan: its draft, or its worktree, branch, and directory
   merge <id>                   Approve: merge a finished plan's branch into the repository's current branch
 
   demo [state]                 Seed and run the simulated demo
@@ -37,6 +41,7 @@ const usage = `Usage: node src/cli.js <command> [options]
   retry <task-id|plan-id>      Requeue a blocked task (or reopen a blocked plan) after you have reconciled it
   limit <name> <value>         Change a plan limit, for example after one was reached
   report [--since ISO]         Markdown summary of results, blockers, and usage
+  report --plan <id> --json    One plan's summary as JSON (the same shape as an entry of \`list --json\`)
 
 Plan commands take --plan <id> (state in ~/.nightshift/plans/<id>); others accept --state <dir> (default .nightshift).`;
 
@@ -45,7 +50,8 @@ const { values, positionals } = parseArgs({ allowPositionals: true, options: {
   'max-dispatches': { type: 'string', default: '20' }, 'poll-seconds': { type: 'string', default: '30' },
   id: { type: 'string' }, title: { type: 'string' }, acceptance: { type: 'string' }, after: { type: 'string' },
   'max-attempts': { type: 'string', default: '2' }, since: { type: 'string' }, help: { type: 'boolean' },
-  plan: { type: 'string' }, steps: { type: 'string' }, request: { type: 'string' }, yes: { type: 'boolean' }, json: { type: 'boolean' }
+  plan: { type: 'string' }, steps: { type: 'string' }, request: { type: 'string' }, yes: { type: 'boolean' }, json: { type: 'boolean' },
+  lines: { type: 'string', default: '40' }, base: { type: 'string' }
 } });
 const [command = 'status', argument] = positionals;
 // demo and status also accept the state directory positionally, as in earlier versions.
@@ -189,7 +195,7 @@ function setup() {
 }
 
 function printDraft(id, { plan: draft, notes, agents }) {
-  console.log(`\nPlan ${id} for ${draft.repo} (${agents}):\n${draft.brief}\n`);
+  console.log(`\nPlan ${id} for ${draft.repo} (${agents}), starting from ${draft.base}:\n${draft.brief}\n`);
   draft.tasks.forEach((task, i) => console.log(`  ${i + 1}. ${task.title}\n     done when: ${task.acceptance}`));
   console.log(`\nChecks: ${draft.checks.join('; ')}\nAllowed paths: ${draft.allowedPaths.map(p => p || '(whole repository)').join(', ')}`);
   console.log(`Limits: ${draft.limits.attemptsPerTask} attempts per task, ${draft.limits.dispatches} dispatches, ` +
@@ -202,13 +208,19 @@ async function draft() {
   if (!argument) throw new Error('Give the document to plan from, for example: draft docs/ROADMAP.md');
   const doc = resolve(argument);
   const repo = execFileSync('git', ['-C', values.repo ? resolve(values.repo) : resolve(doc, '..'), 'rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim();
+  let base = 'HEAD';
+  if (values.base) {
+    try { execFileSync('git', ['-C', repo, 'rev-parse', '--verify', '--quiet', `${values.base}^{commit}`], { stdio: 'ignore' }); }
+    catch { throw new Error(`--base ${values.base} is not a commit in ${repo}.`); }
+    base = values.base;
+  }
   const agents = values.agents ?? readConfig().defaultAgents ?? 'claude:codex';
   const plannerName = agents.split(':')[0];
   const planner = buildPlanner(plannerName, repo);
   console.error(`Drafting with ${planner.describe}…`);
   const drafted = await draftPlan({ session: planner.session, repo, doc, steps: values.steps, request: values.request });
   const id = freePlanId(drafted.plan.id);
-  const record = { ...drafted, plan: { ...drafted.plan, id }, agents, draftedAt: new Date().toISOString() };
+  const record = { ...drafted, plan: { ...drafted.plan, id, base }, agents, draftedAt: new Date().toISOString() };
   const dir = saveDraft(id, record);
   if (values.json) console.log(JSON.stringify({ id, dir, draft: record }));
   else printDraft(id, record);
@@ -242,12 +254,31 @@ function list() {
     const done = p.tasks.filter(t => t.status === 'done').length;
     console.log(`${p.id.padEnd(28)} ${(p.status + (p.paused ? ' (paused)' : '')).padEnd(26)} ${done}/${p.tasks.length} tasks  ` +
       `${p.runner ? 'runner on ' : 'runner off'}  ${p.repo}`);
+    if (p.current) console.log(`  now: ${p.current.title}`);
     if (p.blocker) console.log(`  blocker: ${p.blocker.replace(/\s+/g, ' ').slice(0, 160)}`);
   }
 }
 
+function logs() {
+  if (!argument) throw new Error('logs requires a plan id (see `list`).');
+  if (!summarize(argument)) throw new Error(`No plan or draft named ${argument}.`);
+  const lines = positive(values.lines, 'lines');
+  if (!Number.isInteger(lines)) throw new Error('--lines must be a whole number.');
+  const file = join(planDir(argument), 'serve.log');
+  if (!existsSync(file)) return console.log(`Plan ${argument} has no runner log yet.`);
+  const text = readFileSync(file, 'utf8').replace(/\n$/, '');
+  if (text) console.log(text.split('\n').slice(-lines).join('\n'));
+}
+
+function discard() {
+  if (!argument) throw new Error('discard requires a plan id (see `list`).');
+  const { removed, removes } = discardPlan(argument, { confirm: values.yes });
+  if (!removed) throw new Error(`discard ${argument} would remove:\n${removes.map(r => `  ${r}`).join('\n')}\nRun again with --yes to remove them.`);
+  console.log(`Discarded plan ${argument}:\n${removes.map(r => `  removed ${r}`).join('\n')}`);
+}
+
 const commands = {
-  demo, serve, add, plan, setup, draft, run, list,
+  demo, serve, add, plan, setup, draft, run, list, logs, discard,
   start: () => start(),
   stop: async () => { if (!argument) throw new Error('stop requires a plan id.'); console.log(await stopRunner(argument) ? 'Stopped.' : 'Not running.'); },
   merge: async () => {
@@ -256,7 +287,13 @@ const commands = {
     console.log(`Merged ${merged.branch} into ${merged.target} as ${merged.merged.slice(0, 12)}. The worktree was removed; the branch is kept.`);
   },
   status: () => console.log(JSON.stringify(Store.inspect(directory), null, 2)),
-  report: () => process.stdout.write(renderReport(Store.inspect(directory), { since: values.since })),
+  report: () => {
+    if (!values.json) return process.stdout.write(renderReport(Store.inspect(directory), { since: values.since }));
+    if (!values.plan) throw new Error('report --json requires --plan <id>.');
+    const summary = summarize(values.plan);
+    if (!summary) throw new Error(`No plan or draft named ${values.plan}.`);
+    console.log(JSON.stringify(summary));
+  },
   pause: () => enqueue('pause'),
   resume: () => enqueue('resume'),
   interrupt: () => enqueue('interrupt'),
@@ -264,6 +301,7 @@ const commands = {
   limit: () => {
     const value = positionals[2];
     if (!argument || !value) throw new Error('limit requires a name and a value, for example: limit tokens 8000000');
+    if (!(argument in defaultLimits)) throw new Error(`Unknown limit ${argument}. Valid limits: ${Object.keys(defaultLimits).join(', ')}.`);
     enqueue('limit', { name: argument, value: Number(value) });
   }
 };

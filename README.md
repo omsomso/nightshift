@@ -33,6 +33,25 @@ yes, it runs in the background in its own worktree until the plan is done or nee
 you. `list` shows all plans; `merge <id>` is the final approval. Plans live in
 `~/.nightshift/plans/<id>`.
 
+Commands for plans (`node src/cli.js --help` lists them all):
+
+```sh
+node src/cli.js run docs/PLAN.md --base v1.2           # start the worktree from a tag, branch, or commit, not HEAD
+node src/cli.js draft docs/PLAN.md --base main~3       # only draft; `--base` is recorded in the plan
+node src/cli.js start <id>                             # start (or `stop <id>`) a plan's background runner
+node src/cli.js list                                   # all plans; `now:` names the task running or in review
+node src/cli.js logs <id> --lines 100                  # tail of the runner's serve.log (default 40 lines)
+node src/cli.js report --plan <id>                     # Markdown report: each task's attempts and latest checks
+node src/cli.js report --plan <id> --json              # one plan's summary, as one entry of `list --json`
+node src/cli.js limit tokens 8000000 --plan <id>       # change a limit; unknown names are refused at once
+node src/cli.js discard <id> --yes                     # remove an unmerged plan: its worktree, branch, and directory
+node src/cli.js merge <id>                             # approve: merge the plan's branch
+```
+
+`discard` without `--yes` only lists what it would remove. It refuses while the
+plan's runner is alive (stop it first) and refuses merged plans. Plan checks may not
+run `git push`, `git commit`, `git reset`, or `git rebase`.
+
 For a window and menu-bar view with notifications, build the app (see `app/README.md`):
 
 ```sh
@@ -93,7 +112,7 @@ for you to merge. See `docs/EDIT_MODE.md`.
 - `docs/ROADMAP.md`: ordered implementation backlog and next-agent handoff.
 - `src/supervisor.js`: queue and verification state machine.
 - `src/store.js`: SQLite state, append-only events, runner lease, and command queue.
-- `src/cli.js`: demo, status, serve, add, pause, resume, retry, and report commands.
+- `src/cli.js`: plan commands (setup, run, draft, start, stop, list, logs, discard, merge) and service commands (serve, add, pause, resume, retry, limit, report).
 - `src/report.js`: morning report rendering.
 - `src/plan.js`, `src/workspace.js`: edit-mode plans, worktrees, checks, gates, and commits.
 - `src/planner.js`, `src/plans.js`, `src/home.js`: drafting from documents, plan lifecycle, `~/.nightshift`.
@@ -111,7 +130,8 @@ for you to merge. See `docs/EDIT_MODE.md`.
 - `test/supervisor.test.js`: behavioral checks for unattended execution.
 - `test/service.test.js`: store, lease, command, serve-loop, and report tests.
 - `test/edit.test.js`: edit-mode cycle, gates, limits, final review, and serve end to end.
-- `test/run.test.js`: setup pins, draft → background run → merge, and runner stop.
+- `test/run.test.js`: setup pins, draft → background run → merge, `--base`, and runner stop.
+- `test/cli.test.js`: `logs`, `discard`, limit names, `list` now line, report task detail, and `report --json`.
 - `test/codex.test.js`, `test/claude.test.js`: subprocess protocol and persisted session tests.
 
 ## Next milestone

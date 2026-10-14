@@ -1,5 +1,5 @@
 import { execFileSync, spawn } from 'node:child_process';
-import { existsSync, mkdirSync, openSync, readFileSync, writeFileSync, closeSync } from 'node:fs';
+import { existsSync, mkdirSync, openSync, readFileSync, writeFileSync, closeSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Store } from './store.js';
@@ -119,6 +119,28 @@ export async function mergePlan(id) {
     store.save(supervisor.state);
   } finally { store.release(); }
   return { target, merged, branch };
+}
+
+// Removes an unmerged plan: a draft's directory, or a started plan's worktree, branch, and
+// directory. Without `confirm` it only describes what it would remove.
+export function discardPlan(id, { confirm = false } = {}) {
+  const dir = planDir(id);
+  const state = Store.inspect(dir);
+  const plan = state.plan;
+  if (!plan && !readDraft(dir)) throw new Error(`No plan or draft named ${id}.`);
+  if (state.runner?.alive) throw new Error(`Plan ${id} has a running runner (pid ${state.runner.pid}); stop it first with \`stop ${id}\`.`);
+  if (plan?.status === 'merged') throw new Error(`Plan ${id} is merged; it cannot be discarded.`);
+  const removes = plan ? [`worktree ${plan.worktree}`, `branch ${plan.branch} in ${plan.repo}`, `directory ${dir}`] : [`draft directory ${dir}`];
+  if (!confirm) return { removed: false, removes };
+  if (plan) {
+    if (existsSync(plan.worktree)) git(plan.repo, 'worktree', 'remove', '--force', plan.worktree);
+    else git(plan.repo, 'worktree', 'prune');
+    let branchExists = true;
+    try { git(plan.repo, 'rev-parse', '--verify', '--quiet', `refs/heads/${plan.branch}`); } catch { branchExists = false; }
+    if (branchExists) git(plan.repo, 'branch', '-D', plan.branch);
+  }
+  rmSync(dir, { recursive: true, force: true });
+  return { removed: true, removes };
 }
 
 // One line per plan for the CLI list and the app.
