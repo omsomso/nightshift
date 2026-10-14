@@ -15,6 +15,8 @@ export function renderReport(state, { since, now = new Date() } = {}) {
   if (state.paused) out.push('', '**The queue is paused.** Run `node src/cli.js resume` to continue.');
   if (state.pendingCommands) out.push('', `${state.pendingCommands} queued command(s) are waiting for a running \`serve\`.`);
 
+  if (state.plan) out.push(...planSection(state));
+
   const counts = ['done', 'blocked', 'ready', 'running', 'review'].map(s => `${byStatus(s).length} ${s}`).join(' · ');
   out.push('', `**${counts}**`);
 
@@ -60,4 +62,27 @@ export function renderReport(state, { since, now = new Date() } = {}) {
   }
   if (!Object.keys(usage).length) out.push('- No provider usage was reported.');
   return out.join('\n') + '\n';
+}
+
+// Edit mode: where the work is, how far it got, how close it is to its limits, and how to approve it.
+function planSection(state) {
+  const plan = state.plan;
+  const label = { running: 'running', blocked: 'blocked — needs you', 'awaiting-approval': 'ready for your review and merge' }[plan.status] ?? plan.status;
+  const dispatches = state.events.filter(e => e.type === 'dispatched').length;
+  const tokens = state.events.filter(e => e.type === 'provider:usage')
+    .reduce((sum, e) => sum + (Number(e.detail?.tokens?.input) || 0) + (Number(e.detail?.tokens?.output) || 0), 0);
+  const hours = ((plan.finishedAt ? Date.parse(plan.finishedAt) : Date.now()) - Date.parse(plan.startedAt)) / 3_600_000;
+  const out = ['', `## Plan \`${plan.id}\`: ${label}`, '',
+    `Branch \`${plan.branch}\` from \`${plan.baseCommit.slice(0, 12)}\` in \`${plan.repo}\`; worktree \`${plan.worktree}\`.`,
+    `Limits used: ${dispatches}/${plan.limits.dispatches} dispatches, ${tokens.toLocaleString('en-US')}/${plan.limits.tokens.toLocaleString('en-US')} tokens, ` +
+      `${hours.toFixed(1)}/${plan.limits.hours} hours.`];
+  if (plan.reason) out.push('', `Blocker: ${line(plan.reason)}. After fixing it, run \`node src/cli.js retry ${plan.id}\` and \`resume\`.`);
+  const commits = state.tasks.filter(t => t.commit).map(t => `- \`${t.commit.slice(0, 12)}\` ${t.title}`);
+  if (commits.length) out.push('', 'Commits:', ...commits);
+  if (plan.status === 'awaiting-approval') {
+    out.push('', `Final review: ${line(plan.final?.review?.reason)}.`, '', 'To approve, review the branch and merge it yourself:', '',
+      '```sh', `git -C ${plan.repo} log --stat ${plan.baseCommit.slice(0, 12)}..${plan.branch}`,
+      `git -C ${plan.repo} merge --no-ff ${plan.branch}`, `git -C ${plan.repo} worktree remove ${plan.worktree}`, '```');
+  }
+  return out;
 }

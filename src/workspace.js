@@ -1,0 +1,116 @@
+import { execFileSync, spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { existsSync, realpathSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+import { protectedPaths } from './plan.js';
+
+const reviewDiffChars = 60_000;
+const checkOutputChars = 8_000;
+
+function git(cwd, args, options = {}) {
+  return execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024,
+    stdio: ['ignore', 'pipe', 'pipe'], ...options });
+}
+
+const tail = (text, limit) => text.length > limit ? `[…${text.length - limit} earlier characters omitted]\n${text.slice(-limit)}` : text;
+
+// The plan's isolated working copy. Nightshift, never an agent, stages, inspects,
+// and commits here; agents only edit files inside it under an OS sandbox.
+export class Workspace {
+  constructor({ repo, worktree, branch, baseCommit, checks, allowedPaths, limits }) {
+    Object.assign(this, { repo, worktree, branch, baseCommit, checks, allowedPaths, limits });
+  }
+
+  // Creates branch nightshift/<plan-id> in a new worktree. Refuses to reuse either.
+  static create(plan, directory) {
+    const repo = git(plan.repo, ['rev-parse', '--show-toplevel']).trim();
+    const branch = `nightshift/${plan.id}`;
+    const worktree = join(directory, 'worktree');
+    if (existsSync(worktree)) throw new Error(`${worktree} already exists; use a new state directory.`);
+    try { git(repo, ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`]); throw new Error(`Branch ${branch} already exists in ${repo}; choose a new plan id.`); }
+    catch (error) { if (error.message.includes('already exists')) throw error; }
+    const baseCommit = git(repo, ['rev-parse', '--verify', `${plan.base}^{commit}`]).trim();
+    git(repo, ['worktree', 'add', '-b', branch, worktree, baseCommit]);
+    return new Workspace({ repo, worktree: realpathSync(worktree), branch, baseCommit,
+      checks: plan.checks, allowedPaths: plan.allowedPaths, limits: plan.limits });
+  }
+
+  // Stages everything and describes the change since the last commit on the branch.
+  inspect() {
+    git(this.worktree, ['add', '-A']);
+    const files = git(this.worktree, ['diff', '--cached', '--numstat', '-z', '--no-renames']).split('\0').filter(Boolean).map(entry => {
+      const [added, removed, ...path] = entry.split('\t');
+      return { path: path.join('\t'), added: Number(added) || 0, removed: Number(removed) || 0, binary: added === '-' };
+    });
+    const diff = git(this.worktree, ['diff', '--cached', '--no-renames']);
+    return { files, changedLines: files.reduce((sum, f) => sum + f.added + f.removed, 0), diff,
+      reviewDiff: diff.length > reviewDiffChars ? `${diff.slice(0, reviewDiffChars)}\n[…diff truncated for review]` : diff };
+  }
+
+  // Deterministic gates run before any review. `block` stops the task; `repair` asks the worker to fix it.
+  gate(change) {
+    if (!change.files.length) return { verdict: 'block', reason: 'Stagnation: the attempt changed no files.' };
+    const isProtected = path => protectedPaths.some(p => p.endsWith('/') ? path.startsWith(p) : path === p || path.startsWith(`${p}/`));
+    const blockedPaths = change.files.map(f => f.path).filter(isProtected);
+    if (blockedPaths.length) return { verdict: 'block', reason: `Drift: protected paths changed: ${blockedPaths.join(', ')}.` };
+    const outside = change.files.map(f => f.path).filter(path => !this.allowedPaths.some(prefix => path.startsWith(prefix)));
+    if (outside.length) return { verdict: 'block', reason: `Drift: changes outside the plan's allowed paths: ${outside.join(', ')}.` };
+    if (change.changedLines > this.limits.changedLinesPerTask) {
+      return { verdict: 'repair', reason: `The change is ${change.changedLines} lines, over this plan's cap of ${this.limits.changedLinesPerTask}. Make a smaller change that still meets the task.` };
+    }
+    return { verdict: 'ok' };
+  }
+
+  // Runs the plan's checks in the worktree, one at a time, each with a timeout.
+  async runChecks({ signal } = {}) {
+    const results = [];
+    for (const command of this.checks) {
+      const started = Date.now();
+      const result = await new Promise(resolve => {
+        const child = spawn('/bin/sh', ['-c', command], { cwd: this.worktree, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
+        let output = '';
+        let timedOut = false;
+        const collect = chunk => { output = tail(output + chunk, checkOutputChars * 4); };
+        child.stdout.on('data', collect);
+        child.stderr.on('data', collect);
+        const kill = () => { try { process.kill(-child.pid, 'SIGKILL'); } catch {} };
+        const timer = setTimeout(() => { timedOut = true; kill(); }, this.limits.checkMinutes * 60_000);
+        signal?.addEventListener('abort', kill, { once: true });
+        child.on('error', error => { output += `\n${error.message}`; });
+        child.on('close', code => {
+          clearTimeout(timer);
+          signal?.removeEventListener('abort', kill);
+          resolve({ command, exitCode: timedOut ? null : code, timedOut, durationMs: Date.now() - started, output: tail(output, checkOutputChars) });
+        });
+      });
+      results.push(result);
+      if (signal?.aborted) break;
+    }
+    return { passed: results.length === this.checks.length && results.every(r => r.exitCode === 0), results };
+  }
+
+  // Identifies an attempt for stagnation detection: same diff and same check output.
+  static fingerprint(change, checks) {
+    return createHash('sha256').update(change.diff).update(JSON.stringify(checks.results.map(r => [r.exitCode, r.output]))).digest('hex');
+  }
+
+  commit(task, planId) {
+    // The worktree must still be this plan's branch in this repository before anything is committed.
+    const branch = git(this.worktree, ['rev-parse', '--abbrev-ref', 'HEAD']).trim();
+    const common = realpathSync(resolve(this.worktree, git(this.worktree, ['rev-parse', '--git-common-dir']).trim()));
+    const expected = realpathSync(resolve(this.repo, git(this.repo, ['rev-parse', '--git-common-dir']).trim()));
+    if (branch !== this.branch || common !== expected) throw new Error(`Worktree no longer points at ${this.branch} in ${this.repo}; refusing to commit.`);
+    git(this.worktree, ['add', '-A']);
+    git(this.worktree, ['-c', 'user.name=Nightshift', '-c', 'user.email=nightshift@local.invalid', 'commit', '--no-verify', '-q',
+      '-m', task.title, '-m', `Nightshift-Plan: ${planId}\nNightshift-Task: ${task.id}`]);
+    return git(this.worktree, ['rev-parse', 'HEAD']).trim();
+  }
+
+  planDiff() {
+    const diff = git(this.worktree, ['diff', this.baseCommit, 'HEAD', '--no-renames']);
+    const stat = git(this.worktree, ['diff', '--shortstat', this.baseCommit, 'HEAD']).trim();
+    return { stat, reviewDiff: diff.length > reviewDiffChars ? `${diff.slice(0, reviewDiffChars)}\n[…diff truncated for review]` : diff };
+  }
+
+  clean() { return !git(this.worktree, ['status', '--porcelain']).trim(); }
+}

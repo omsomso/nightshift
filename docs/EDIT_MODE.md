@@ -1,7 +1,7 @@
-# Edit mode (approved design, being implemented)
+# Edit mode
 
-Status: approved by the owner on 2026-10-14. Implementation is in progress; see
-docs/ROADMAP.md for what is built.
+Status: approved by the owner and implemented on 2026-10-14. See "Verification" below
+for what has been checked against real agents.
 
 Goal: agents implement a whole plan unattended, in an isolated copy of the
 repository, and stop at a branch that waits for the owner's merge. Dangerous or
@@ -74,6 +74,67 @@ rewrite history; no package installs or web lookups (dependencies must already b
 installed); push is impossible. Protected paths that no task may change by default:
 `.git`, `.github/`, `.claude/`, `.codex/`, `AGENTS.md`, `CLAUDE.md`, and Nightshift's
 own state.
+
+## Using it
+
+Write a plan file (JSON). `repo` is relative to the plan file; `allowedPaths` are
+repository-relative prefixes (omit for the whole repository); `limits` override the
+defaults above.
+
+```json
+{
+  "id": "math-extensions",
+  "repo": "../my-project",
+  "base": "main",
+  "brief": "Extend the math library with multiplication and safe division, each with tests.",
+  "checks": ["npm test"],
+  "allowedPaths": ["src/", "test/"],
+  "limits": { "tokens": 3000000 },
+  "tasks": [
+    { "id": "multiply", "title": "Add multiply(a, b)", "acceptance": "Exported and tested, including a negative number." },
+    { "id": "divide", "title": "Add divide(a, b)", "acceptance": "Throws RangeError on zero; tests cover both cases." }
+  ]
+}
+```
+
+```sh
+node src/cli.js plan plan.json --state .nightshift/math        # creates the worktree and branch
+node src/cli.js serve --agents claude:codex --state .nightshift/math
+node src/cli.js report --state .nightshift/math                # progress, limits, and the merge command
+node src/cli.js limit tokens 6000000 --state .nightshift/math  # raise a limit after it was reached
+node src/cli.js retry math-extensions --state .nightshift/math # reopen a blocked plan, then resume
+```
+
+Use one state directory per plan. Plans in different state directories can run at
+the same time, each in its own worktree. The worktree lives at `<state>/worktree`.
+
+## Verification (2026-10-14, dev Mac; claude 2.1.296, codex-cli 0.162.1)
+
+Sandbox probe: a real edit-mode worker of each provider was asked to try four things in
+a worktree. Both results matched:
+
+| Attempt | Claude | Codex |
+| --- | --- | --- |
+| Write a file outside the worktree (not in temp) | blocked: operation not permitted | blocked: operation not permitted |
+| `curl https://example.com` | blocked by the sandbox network proxy | blocked: host could not be resolved |
+| `git commit` | refused by the deny rule (and the task blocks) | blocked: git metadata not writable |
+| Write a file inside the worktree | allowed | allowed |
+
+Note: Claude's sandbox also allows writes to its per-user temp directory by design.
+
+Live plans on a toy Node project (two tasks: multiply, then divide with a zero check;
+checks `npm test`; allowed paths `src/`, `test/`): `claude:codex` and `codex:claude`
+both reached `awaiting-approval` in about a minute, every task on attempt 1, with a
+passing final review. Each branch had exactly two Nightshift-authored commits touching
+only `src/math.js` and `test/math.test.js`; tests passed on both branches; the owner's
+`main` and working tree were unchanged. Usage per plan: about 160–176 thousand tokens.
+
+Behavior to know: a denied tool request (such as an agent trying `git commit`) blocks
+the task rather than letting the agent continue. Plan limits are checked before each
+dispatch, so the last task before a limit can overshoot it.
+
+Not yet verified live: a check failure followed by a repair, a gate block (drift or
+size) with a real agent, the per-turn 20-minute timeout, and a large repository.
 
 ## Not in the first version
 

@@ -53,7 +53,9 @@ Exit: one real task and follow-up run through each adapter without desktop click
 - [ ] Confirm which Claude account pays for unattended runs (subscription or API key).
 - [x] Cross-provider review with shared prompts (fixture-tested; `smoke.js` pairings).
 - [ ] Cross-provider review using shared artifacts and explicit task context.
-- [ ] Separate worktrees for concurrent tasks and controlled integration.
+- [x] Edit mode: one worktree per plan, Nightshift-run checks and gates, Nightshift commits, owner merges (docs/EDIT_MODE.md).
+- [x] OS sandboxes for edit-mode workers (Claude bash sandbox, Codex workspace-write; no network) — live-probed.
+- [ ] Concurrent tasks within one plan and controlled integration between plans.
 - [ ] Bounded research/ideation tasks with recorded decision evidence.
 
 ## Handoff
@@ -61,9 +63,10 @@ Exit: one real task and follow-up run through each adapter without desktop click
 Finish M1 using docs/CODEX_SETUP.md and docs/CLAUDE_SETUP.md. Do not build the full
 dashboard before proving live session control. Both adapters implement documented
 protocol subsets. On the development Mac, codex:codex, claude:claude, and codex:claude
-read-only runs have all passed review (see the setup docs); no adapter has edited files.
+read-only runs have all passed review (see the setup docs). Edit mode completed two live
+plans on a toy project (claude:codex and codex:claude; see docs/EDIT_MODE.md).
 Neither adapter has run on the owner's VM or accessed existing chats. Commands run from
 an agent sandbox may lack network access to OpenAI; run live checks from a normal terminal.
-Run `npm test` (79 tests) and `npm run demo` for the offline baseline. The live smoke
+Run `npm test` (93 tests) and `npm run demo` for the offline baseline. The live smoke
 commands are separate and can consume provider usage. Their version pins are operator
 checks, not declarations that a specific release has been certified.
