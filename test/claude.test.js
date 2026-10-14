@@ -34,6 +34,7 @@ for (const mode of ['normal', 'text-result']) {
     assert.equal(events.find(x => x.type === 'output').text, 'Résumé 🦉');
     assert.equal(events.find(x => x.type === 'tool-activity').tool, 'Read');
     assert.equal(events.find(x => x.type === 'usage').costUsd, 0.0123);
+    assert.deepEqual(events.find(x => x.type === 'usage').tokens, { input: 10, cachedInput: 0, output: 5 });
     assert.equal(events.find(x => x.type === 'turn-started').authSource, 'none');
     assert.equal(events.filter(x => x.type === 'turn-completed').length, 1);
     assert.ok(events.every(x => x.provider === 'claude'));

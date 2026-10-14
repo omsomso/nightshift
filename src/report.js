@@ -46,14 +46,17 @@ export function renderReport(state, { since, now = new Date() } = {}) {
 
   const usage = {};
   for (const { detail } of events.filter(event => event.type === 'provider:usage')) {
-    const entry = usage[detail.provider] ??= { turns: 0, costUsd: 0 };
+    const entry = usage[detail.provider] ??= { turns: 0, costUsd: null, input: 0, cachedInput: 0, output: 0 };
     entry.turns += 1;
-    entry.costUsd += Number(detail.costUsd) || 0;
+    if (Number.isFinite(Number(detail.costUsd))) entry.costUsd = (entry.costUsd ?? 0) + Number(detail.costUsd);
+    for (const key of ['input', 'cachedInput', 'output']) entry[key] += Number(detail.tokens?.[key]) || 0;
   }
+  const count = value => value.toLocaleString('en-US');
   const dispatches = events.filter(event => event.type === 'dispatched').length;
   out.push('', '## Usage', '', `- ${dispatches} dispatch(es).`);
-  for (const [provider, { turns, costUsd }] of Object.entries(usage)) {
-    out.push(`- ${provider}: ${turns} turn(s), reported cost $${costUsd.toFixed(4)} (subscription sign-ins may report notional cost).`);
+  for (const [provider, { turns, costUsd, input, cachedInput, output }] of Object.entries(usage)) {
+    const cost = costUsd === null ? 'no cost reported (plan usage)' : `list-price cost $${costUsd.toFixed(4)}, counted against the plan`;
+    out.push(`- ${provider}: ${turns} turn(s); ${count(input)} input tokens (${count(cachedInput)} cached), ${count(output)} output; ${cost}.`);
   }
   if (!Object.keys(usage).length) out.push('- No provider usage was reported.');
   return out.join('\n') + '\n';

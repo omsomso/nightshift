@@ -91,6 +91,11 @@ The documentation-shaped fixture covers integration plumbing, not authentication
 provider execution, sandbox effectiveness, or compatibility with an installed binary.
 The VM smoke command requires an exact version string and existing authentication.
 
+Streamed agent text is merged before it is saved (one event per 4 KB, 5 seconds, or
+item boundary), and each turn ends with one `usage` event. Both adapters normalize
+tokens to `input` (including cached), `cachedInput`, and `output`; Claude also reports
+a list-price `costUsd`, while Codex reports none.
+
 ## Initial Claude adapter
 
 The Claude adapter runs `claude -p --output-format stream-json` as a child process,

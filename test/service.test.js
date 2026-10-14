@@ -183,6 +183,7 @@ test('the report separates simulated, blocked, refused, and billed results', () 
     { taskId: 'a', type: 'dispatched', detail: 'Attempt 1', at },
     { taskId: 'b', type: 'provider:approval-required', detail: { provider: 'claude', tool: 'Bash', reason: 'Denied automatically.' }, at },
     { taskId: 'b', type: 'provider:usage', detail: { provider: 'claude', costUsd: 0.0123 }, at },
+    { taskId: 'a', type: 'provider:usage', detail: { provider: 'codex', requests: 3, tokens: { input: 1234567, cachedInput: 1000, output: 42 } }, at },
     { taskId: 'old', type: 'verified', detail: 'ok', at: '2026-10-01T00:00:00.000Z' }
   ], tasks: [
     { id: 'a', title: 'Simulated task', status: 'done', attempts: 1, dependencies: [],
@@ -197,6 +198,7 @@ test('the report separates simulated, blocked, refused, and billed results', () 
   assert.match(report, /waiting on b/);
   assert.match(report, /claude: Bash/);
   assert.match(report, /\$0\.0123/);
+  assert.match(report, /codex: 1 turn\(s\); 1,234,567 input tokens \(1,000 cached\), 42 output; no cost reported/);
   assert.match(report, /queue is paused/);
   assert.doesNotMatch(report, /Old task/);
   assert.throws(() => renderReport(state, { since: 'yesterday-ish' }), /ISO/);

@@ -71,6 +71,20 @@ export class CodexSession {
     let buffer = [];
     let finalText = '';
     let finished = false;
+    // Deltas are merged before persisting: one event per 4 KB, 5 seconds, or item boundary.
+    let pendingText = '';
+    let flushedAt = Date.now();
+    const flush = () => {
+      if (!pendingText) return;
+      const text = pendingText;
+      pendingText = '';
+      flushedAt = Date.now();
+      emit({ type: 'output', threadId, turnId, text });
+    };
+    // Each token notification's `last` covers one model request; a turn's usage is their sum.
+    const tokens = { input: 0, cachedInput: 0, output: 0, reasoningOutput: 0 };
+    let requests = 0;
+    let threadTotal = null;
     let resolveTurn;
     let rejectTurn;
     const completion = new Promise((resolve, reject) => { resolveTurn = resolve; rejectTurn = reject; });
@@ -85,12 +99,27 @@ export class CodexSession {
       if (eventTurnId !== turnId) return;
       try {
         if (message.method === 'item/agentMessage/delta') {
-          emit({ type: 'output', threadId, turnId, text: p.delta ?? '' });
+          pendingText += p.delta ?? '';
+          if (pendingText.length >= 4096 || Date.now() - flushedAt >= 5000) flush();
+        } else if (message.method === 'thread/tokenUsage/updated') {
+          const { last, total } = p.tokenUsage ?? {};
+          if (last) {
+            requests += 1;
+            tokens.input += last.inputTokens ?? 0;
+            tokens.cachedInput += last.cachedInputTokens ?? 0;
+            tokens.output += last.outputTokens ?? 0;
+            tokens.reasoningOutput += last.reasoningOutputTokens ?? 0;
+          }
+          threadTotal = total ?? threadTotal;
         } else if (message.method === 'item/completed') {
+          flush();
           const item = p.item ?? {};
           if (item.type === 'agentMessage' && typeof item.text === 'string') finalText = item.text;
           emit({ type: 'item-completed', threadId, turnId, item });
         } else if (message.method === 'turn/completed') {
+          flush();
+          // Codex reports tokens, not cost: usage draws on the ChatGPT plan.
+          if (requests) emit({ type: 'usage', threadId, turnId, requests, tokens: { ...tokens }, threadTotal });
           emit({ type: 'turn-completed', threadId, turnId, status: p.turn.status });
           if (p.turn.status !== 'completed') throw new Error(`Codex turn ${p.turn.status}: ${p.turn.error?.message ?? 'no result'}`);
           const result = JSON.parse(finalText);
@@ -98,6 +127,7 @@ export class CodexSession {
           finished = true;
           resolveTurn(result);
         } else if (message.method === 'error') {
+          flush();
           emit({ type: 'provider-error', threadId, turnId, message: p.error?.message ?? 'Provider error', willRetry: p.willRetry === true });
           if (!p.willRetry) throw new Error(p.error?.message ?? 'Codex turn failed.');
         }
@@ -126,6 +156,7 @@ export class CodexSession {
       return await completion;
     } catch (error) {
       fail(error);
+      try { flush(); } catch {} // Keep partial output for diagnosis when persistence still works.
       // Best effort only. Never interpret interrupt acknowledgement as rollback.
       if (turnId && !client.failure) {
         try { await client.request('turn/interrupt', { threadId, turnId }, { timeoutMs: 1000 }); } catch {}
