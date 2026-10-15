@@ -5,6 +5,7 @@ struct AccountsView: View {
     @Environment(AppModel.self) private var app
     @State private var status: ProvidersResponse?
     @State private var working: String?
+    @State private var effort: EffortSettings?
 
     var body: some View {
         Form {
@@ -34,15 +35,28 @@ struct AccountsView: View {
                     LabeledContent("New plans use", value: AgentChoice.all.first { $0.spec == defaultAgents }?.label ?? defaultAgents)
                 }
             }
+            if let effort {
+                Section {
+                    effortPicker("Workers at least", key: "min", value: effort.min)
+                    effortPicker("Workers at most", key: "max", value: effort.max)
+                    effortPicker("Reviewers", key: "reviewer", value: effort.reviewer)
+                    effortPicker("Planner and interviewer", key: "planner", value: effort.planner)
+                } header: {
+                    Text("Effort")
+                } footer: {
+                    Text("Workers start at the planner's difficulty rating for each task and go one level higher on every retry, within these bounds. Reviewers run at a fixed level. New plans take these settings when they start.")
+                        .foregroundStyle(.secondary)
+                }
+            }
             if let message = app.errorMessage {
                 Section { Text(message).foregroundStyle(.orange).textSelection(.enabled) }
             }
         }
         .formStyle(.grouped)
         .frame(width: 560)
-        .frame(minHeight: 380)
+        .frame(minHeight: 660)
         .disabled(working != nil)
-        .task { status = await app.loadProviders() }
+        .task { status = await app.loadProviders(); effort = await app.loadEffort() }
     }
 
     private func row(_ provider: ProviderStatus) -> some View {
@@ -69,6 +83,17 @@ struct AccountsView: View {
             .help(provider.enabled ? "Turn \(provider.displayName) off" : "Turn \(provider.displayName) on")
         }
         .padding(.vertical, 4)
+    }
+
+    private func effortPicker(_ label: String, key: String, value: String) -> some View {
+        Picker(label, selection: Binding(get: { value }, set: { level in
+            Task {
+                await app.perform(["effort", "set", key, level], for: "accounts")
+                effort = await app.loadEffort()
+            }
+        })) {
+            ForEach(EffortSettings.levels, id: \.self) { Text($0).tag($0) }
+        }
     }
 
     private func act(_ key: String, _ arguments: [String]) async {

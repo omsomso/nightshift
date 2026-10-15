@@ -327,3 +327,30 @@ test('project rules are collected once, snapshotted per plan, and reach every ed
   for (const prompt of [editWorkerPrompt(task, plan), editReviewerPrompt(task, {}, { checks, reviewDiff: '' }, plan),
     finalReviewPrompt(plan, { stat: '', reviewDiff: '' }, checks)]) assert.match(prompt, /Codeword HERON[\s\S]*end of project rules/);
 });
+
+test('effort: rated difficulty sets the start, each retry goes one level up, reviewers stay fixed', async t => {
+  const { workerEffort, validateEffort, codexEffort } = await import('../src/effort.js');
+  const settings = validateEffort({});
+  assert.deepEqual([1, 2, 3].map(attempts => workerEffort({ difficulty: 'medium', attempts }, settings)), ['medium', 'high', 'xhigh']);
+  assert.equal(workerEffort({ difficulty: 'low', attempts: 1 }, settings), 'medium', 'never below the minimum');
+  assert.equal(workerEffort({ difficulty: 'high', attempts: 5 }, settings), 'xhigh', 'never above the maximum');
+  assert.equal(workerEffort({ attempts: 1 }, settings), 'medium', 'unrated tasks count as medium');
+  assert.throws(() => validateEffort({ min: 'max', max: 'low' }), /min \(max\) is above max \(low\)/);
+  assert.throws(() => validateEffort({ speed: 'high' }), /Unknown effort setting speed/);
+  assert.deepEqual(['low', 'medium', 'high', 'xhigh', 'max'].map(codexEffort), ['low', 'medium', 'high', 'high', 'high']);
+
+  const env = makeRepo(t);
+  const seen = [];
+  const worker = scriptedWorker({ 'one:1': { 'notes/one.txt': 'BAD\n' }, 'one:2': { 'notes/one.txt': 'good\n' } });
+  const tracking = { async execute(task, context) { seen.push(['worker', task.attempts, context.effort]); return worker.execute(task, context); } };
+  const reviewer = { async review(task, result, context) { seen.push([context.final ? 'final' : 'reviewer', null, context.effort]); return { passed: true, reason: 'ok' }; } };
+  const { store, supervisor } = startPlan(t, env, tracking, reviewer, { tasks: [{ id: 'one', title: 'x', acceptance: 'x', difficulty: 'medium' }] });
+  await supervisor.run();
+  assert.deepEqual(seen, [['worker', 1, 'medium'], ['worker', 2, 'high'], ['reviewer', null, 'high'], ['final', null, 'high']]);
+  const state = store.read();
+  assert.equal(state.tasks[0].effort, 'high');
+  assert.match(state.events.filter(e => e.type === 'dispatched').map(e => e.detail).join(' | '), /Attempt 1 at medium effort \| Attempt 2 at high effort/);
+  const { claudeArgs } = await import('../src/claude/session.js');
+  const args = claudeArgs({ sessionId: 'x', outputSchema: {}, effort: 'high' });
+  assert.equal(args[args.indexOf('--effort') + 1], 'high');
+});

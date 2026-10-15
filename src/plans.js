@@ -8,6 +8,8 @@ import { Workspace } from './workspace.js';
 import { validatePlan } from './plan.js';
 import { planDir, listPlanIds } from './home.js';
 import { collectRules } from './rules.js';
+import { validateEffort } from './effort.js';
+import { readConfig } from './home.js';
 
 const cliFile = fileURLToPath(new URL('./cli.js', import.meta.url));
 const git = (cwd, ...args) => execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
@@ -37,7 +39,8 @@ export function createPlan(definition, directory, { agents } = {}) {
     const supervisor = new Supervisor(store, null, null);
     // The rules as of the plan's base commit, fixed for the whole plan.
     const rules = collectRules(workspace.repo, { root: workspace.worktree });
-    supervisor.state.plan = { ...definition, ...(agents ? { agents } : {}), rules, repo: workspace.repo, worktree: workspace.worktree,
+    const effort = validateEffort({ ...readConfig().effort, ...definition.effort });
+    supervisor.state.plan = { ...definition, ...(agents ? { agents } : {}), rules, effort, repo: workspace.repo, worktree: workspace.worktree,
       branch: workspace.branch, baseCommit: workspace.baseCommit, status: 'running', startedAt: new Date().toISOString() };
     supervisor.record(null, 'plan-started', `${definition.tasks.length} tasks on ${workspace.branch} from ${workspace.baseCommit.slice(0, 12)}`);
     definition.tasks.forEach((task, index) => supervisor.add({ ...task, maxAttempts: definition.limits.attemptsPerTask,
@@ -170,7 +173,9 @@ export function summarize(id) {
     blocker: plan.reason ?? blocked?.reason ?? null, current: current ? { id: current.id, title: current.title, status: current.status } : null,
     finalReview: plan.final?.review?.reason ?? null,
     rules: (plan.rules ?? []).map(r => [r.path, ...(r.also ?? [])].join(' = ')),
-    tasks: state.tasks.map(t => ({ id: t.id, title: t.title, status: t.status, attempts: t.attempts, commit: t.commit ?? null, reason: t.reason ?? null })),
+    tasks: state.tasks.map(t => ({ id: t.id, title: t.title, status: t.status, attempts: t.attempts, commit: t.commit ?? null, reason: t.reason ?? null,
+      difficulty: t.difficulty ?? null, difficultyReason: plan.tasks?.find(p => p.id === t.id)?.difficultyReason ?? null, effort: t.effort ?? null })),
+    effort: plan.effort ?? null,
     limits: { dispatches: [dispatches, plan.limits.dispatches], tokens: [tokens, plan.limits.tokens], hours: [Number(hours.toFixed(2)), plan.limits.hours] },
     lastEvent: last ? { at: last.at, type: last.type } : null,
     log: tailLog(dir, 3)
@@ -178,3 +183,22 @@ export function summarize(id) {
 }
 
 export const listPlans = () => listPlanIds().map(summarize).filter(Boolean);
+
+// The owner's difficulty rating for one task: edits a draft directly, or queues the change
+// for a started plan (it applies from the task's next attempt).
+export function setTaskDifficulty(id, taskId, level) {
+  if (!['low', 'medium', 'high'].includes(level)) throw new Error('Difficulty must be low, medium, or high.');
+  const dir = planDir(id);
+  if (Store.inspect(dir).plan) {
+    Store.enqueue(dir, 'difficulty', { id: taskId, level });
+    return 'queued';
+  }
+  const draft = readDraft(dir);
+  if (!draft) throw new Error(`No plan or draft named ${id}.`);
+  const task = draft.plan.tasks.find(t => t.id === taskId);
+  if (!task) throw new Error(`No task ${taskId} in draft ${id}.`);
+  task.difficulty = level;
+  task.difficultyReason = `Set by the owner (was: ${task.difficultyReason ?? 'not rated'}).`;
+  saveDraft(id, draft);
+  return 'updated';
+}

@@ -47,6 +47,7 @@ createInterface({ input: process.stdin }).on('line', line => {
     return response(m.id, {});
   }
   if (m.method !== 'turn/start') return rpcError(m.id, `Unexpected method ${m.method}`);
+  if (m.params.effort !== undefined && !['low', 'medium', 'high'].includes(m.params.effort)) return rpcError(m.id, `Unsupported effort ${m.params.effort}`);
   const policy = m.params.sandboxPolicy;
   const edit = policy?.type === 'workspaceWrite' && policy.networkAccess === false;
   if (!(policy?.type === 'readOnly' || edit) || m.params.approvalPolicy !== 'never') return rpcError(m.id, 'Expected read-only or no-network workspace-write turn');
@@ -68,7 +69,7 @@ createInterface({ input: process.stdin }).on('line', line => {
   }
   const isPlanner = m.params.outputSchema.required.includes('tasks');
   const result = isPlanner ? { id: 'Fixture Notes!', brief: 'Write two notes.', checks: ['node check.js'], allowedPaths: ['notes/'], notes: '',
-      tasks: [{ id: 'note-one', title: 'Write note one', acceptance: 'A first note exists.' }, { id: 'note-two', title: 'Write note two', acceptance: 'A second note exists.' }] }
+      tasks: [{ id: 'note-one', title: 'Write note one', acceptance: 'A first note exists.', difficulty: 'low', difficultyReason: 'One small file.' }, { id: 'note-two', title: 'Write note two', acceptance: 'A second note exists.', difficulty: 'high', difficultyReason: 'Pretend this is subtle.' }] }
     : isReview ? { passed: true, reason: 'Fixture review only.' }
     : { summary: 'Fixture résumé 🦉', evidence: ['fixture:README.md'] };
   notify('turn/completed', { threadId: 'unrelated-thread', turn: { id: currentTurn, status: 'completed' } });

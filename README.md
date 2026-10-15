@@ -67,6 +67,10 @@ to every agent, whether you start the plan from a terminal, a Claude or Codex se
 or the app. Where a project's rules ask for something Nightshift forbids (commit, push,
 install, network), Nightshift wins and the agent lists it as left for you.
 
+**Effort.** The planner rates each task low, medium, or high; workers start at that effort
+and go one level higher on every retry, while reviewers stay at a fixed high level. You
+set the bounds (`nightshift effort`) and can change any rating on the draft.
+
 **From quick notes.** In the app, New Plan takes your pasted notes: Claude finds the
 project in your workspace (`nightshift projects`), interviews you with multiple-choice
 questions, and writes the roadmap; you approve before anything runs. The same works from

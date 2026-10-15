@@ -50,6 +50,7 @@ Exit: one real task and follow-up run through each adapter without desktop click
 - [x] `nightshift` command and skill for Claude Code and Codex, installed by `setup` (live-checked: a fresh session in VSTS found it).
 - [x] App as entry point: Plan Studio, Accounts (status, sign-in, on/off, setup), icon (checked on screen by the owner).
 - [x] Notes-first interview: Claude picks the project from the workspace, asks multiple-choice questions, writes the roadmap; worker/reviewer pickers; Codex listed when off (live-checked).
+- [x] Effort: planner rates task difficulty; worker effort starts there and rises per retry; fixed reviewer and planner levels; owner bounds (Claude live-checked; Codex fixture-only).
 - [x] Planner reads project rules (AGENTS.md, CLAUDE.md) and includes the files they require in allowed paths (prompt-level; not yet re-run live).
 - [x] Final review judges only what the plan allows; a failed final phase becomes one bounded fix-up task (fixture-tested).
 
@@ -78,6 +79,6 @@ read-only runs have all passed review (see the setup docs). Edit mode completed 
 plans on a toy project (claude:codex and codex:claude; see docs/EDIT_MODE.md).
 Neither adapter has run on the owner's VM or accessed existing chats. Commands run from
 an agent sandbox may lack network access to OpenAI; run live checks from a normal terminal.
-Run `npm test` (117 tests) and `npm run demo` for the offline baseline. The live smoke
+Run `npm test` (119 tests) and `npm run demo` for the offline baseline. The live smoke
 commands are separate and can consume provider usage. Their version pins are operator
 checks, not declarations that a specific release has been certified.

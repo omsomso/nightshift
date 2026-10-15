@@ -18,6 +18,8 @@ import { installIntegration } from './install.js';
 import { chatTurn } from './chat.js';
 import { listProjects, workspaceRoots } from './projects.js';
 import { spawnSync } from 'node:child_process';
+import { setTaskDifficulty } from './plans.js';
+import { validateEffort, levels } from './effort.js';
 import { createPlan, saveDraft, startPlan, stopRunner, mergePlan, discardPlan, summarize, listPlans } from './plans.js';
 
 const usage = `Usage: node src/cli.js <command> [options]
@@ -52,6 +54,8 @@ const usage = `Usage: node src/cli.js <command> [options]
   interrupt                    Stop the running turn now; its task blocks and the queue pauses
   retry <task-id|plan-id>      Requeue a blocked task (or reopen a blocked plan) after you have reconciled it
   limit <name> <value>         Change a plan limit, for example after one was reached
+  difficulty <task> <level>    Rate a task low|medium|high (--plan id): sets the worker's starting effort
+  effort [set <key> <level>]   Effort bounds and fixed levels: min, max, reviewer, planner (low…max)
   report [--since ISO]         Markdown summary of results, blockers, and usage
   report --plan <id> --json    One plan's summary as JSON (the same shape as an entry of \`list --json\`)
 
@@ -210,7 +214,7 @@ function setup() {
 
 function printDraft(id, { plan: draft, notes, agents }) {
   console.log(`\nPlan ${id} for ${draft.repo} (${agents}), starting from ${draft.base}:\n${draft.brief}\n`);
-  draft.tasks.forEach((task, i) => console.log(`  ${i + 1}. ${task.title}\n     done when: ${task.acceptance}`));
+  draft.tasks.forEach((task, i) => console.log(`  ${i + 1}. ${task.title}${task.difficulty ? `  [${task.difficulty}: ${task.difficultyReason ?? ''}]` : ''}\n     done when: ${task.acceptance}`));
   console.log(`\nChecks: ${draft.checks.join('; ')}\nAllowed paths: ${draft.allowedPaths.map(p => p || '(whole repository)').join(', ')}`);
   console.log(`Limits: ${draft.limits.attemptsPerTask} attempts per task, ${draft.limits.dispatches} dispatches, ` +
     `${draft.limits.tokens.toLocaleString('en-US')} tokens, ${draft.limits.hours} hours`);
@@ -326,6 +330,20 @@ async function chat() {
     notes: values.notes, cwd: values.cwd, withRules: values['with-rules'] })));
 }
 
+function effort() {
+  const [, action, key, level] = positionals;
+  const config = readConfig();
+  if (action === 'set') {
+    if (!key || !level) throw new Error(`Use: effort set <min|max|reviewer|planner> <${levels.join('|')}>`);
+    config.effort = validateEffort({ ...config.effort, [key]: level });
+    writeConfig(config);
+  } else if (action) throw new Error('Use: effort [set <key> <level>]');
+  const settings = validateEffort(config.effort);
+  if (values.json) return console.log(JSON.stringify(settings));
+  console.log(`Workers start at the task's difficulty (low, medium, high), one level higher per retry, within ${settings.min}…${settings.max}.\n` +
+    `Reviewers: ${settings.reviewer}. Planner and interviewer: ${settings.planner}. New plans take these settings when they start.`);
+}
+
 function projects() {
   const list = listProjects();
   if (values.json) return console.log(JSON.stringify({ workspaces: workspaceRoots(), projects: list }));
@@ -346,7 +364,11 @@ function workspaces() {
 }
 
 const commands = {
-  demo, serve, add, plan, setup, draft, run, list, providers, login, chat, projects, workspaces,
+  demo, serve, add, plan, setup, draft, run, list, providers, login, chat, projects, workspaces, effort,
+  difficulty: () => {
+    if (!values.plan || !argument || !positionals[2]) throw new Error('Use: difficulty <task-id> <low|medium|high> --plan <id>');
+    console.log(setTaskDifficulty(values.plan, argument, positionals[2]) === 'queued' ? 'Queued: applies from the task\'s next attempt.' : 'Draft updated.');
+  },
   disable: () => toggleProvider(false),
   enable: () => toggleProvider(true), logs, discard,
   start: () => start(),

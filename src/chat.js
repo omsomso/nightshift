@@ -4,6 +4,8 @@ import { buildPlanner, gitRoot } from './providers.js';
 import { chatPrompt, interviewPrompt } from './prompts.js';
 import { collectRules, rulesBlock } from './rules.js';
 import { listProjects, workspaceRoots } from './projects.js';
+import { validateEffort, plannerEffort } from './effort.js';
+import { readConfig } from './home.js';
 
 // One turn of a plan conversation with a read-only Claude session. Two ways to start:
 // - repository chat: --repo given; the session works in that repository;
@@ -27,6 +29,7 @@ export async function chatTurn({ repo, session, message, notes = false, cwd, wit
     prompt = `${rulesBlock(collectRules(gitRoot(repo)))}\n\n${message}`;
   }
   const reply = await planner.session.run({ prompt, session: session ? { threadId: session } : undefined, outputSchema: null,
+    effort: plannerEffort(validateEffort(readConfig().effort)),
     onEvent: event => { if (event.type === 'session') id = event.threadId; } });
   return { session: id, cwd: folder, ...parseReply(reply) };
 }

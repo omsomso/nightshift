@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { difficulties, validateEffort } from './effort.js';
 import { resolve, dirname } from 'node:path';
 
 // Defaults from docs/EDIT_MODE.md. A plan file may lower or raise any of them.
@@ -45,6 +46,7 @@ export function validatePlan(plan, baseDir, label = 'plan') {
     if (ids.has(task.id)) fail(`duplicate task id ${task.id}.`);
     ids.add(task.id);
     if (!task.title?.trim() || !task.acceptance?.trim()) fail(`task ${task.id} needs a title and acceptance criteria.`);
+    if (task.difficulty !== undefined && !difficulties.includes(task.difficulty)) fail(`task ${task.id} difficulty must be low, medium, or high.`);
   }
   const allowedPaths = plan.allowedPaths ?? [''];
   if (!Array.isArray(allowedPaths) || allowedPaths.some(p => typeof p !== 'string' || p.startsWith('/') || p.includes('..'))) {
@@ -60,6 +62,8 @@ export function validatePlan(plan, baseDir, label = 'plan') {
   return {
     id: plan.id, repo: resolve(baseDir, plan.repo), base: plan.base ?? 'HEAD', brief: plan.brief.trim(),
     checks: plan.checks, allowedPaths, limits,
-    tasks: plan.tasks.map(task => ({ id: task.id, title: task.title.trim(), acceptance: task.acceptance.trim() }))
+    ...(plan.effort ? { effort: (() => { try { return validateEffort(plan.effort); } catch (error) { return fail(error.message); } })() } : {}),
+    tasks: plan.tasks.map(task => ({ id: task.id, title: task.title.trim(), acceptance: task.acceptance.trim(),
+      ...(task.difficulty ? { difficulty: task.difficulty, ...(task.difficultyReason ? { difficultyReason: String(task.difficultyReason).trim() } : {}) } : {}) }))
   };
 }

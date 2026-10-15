@@ -48,7 +48,9 @@ The Nightshift app's New Plan window runs this same interview, if the owner pref
 
    It prints the drafted tasks, checks, allowed paths, limits, and planner notes.
    `--agents worker:reviewer` chooses who works and who reviews (claude, codex); the
-   default follows which providers are turned on.
+   default follows which providers are turned on. Each task carries a difficulty rating
+   (low, medium, high) that sets the worker's starting effort; retries go one level up.
+   If the owner disagrees with a rating: `nightshift difficulty <task> <level> --plan <id>`.
 3. Show the draft to the user and ask whether to start it. Only start when they say so:
 
    ```sh

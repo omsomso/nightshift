@@ -64,6 +64,9 @@ struct PlanTask: Decodable, Hashable {
     let attempts: Int?
     let commit: String?
     let reason: String?
+    let difficulty: String?
+    let difficultyReason: String?
+    let effort: String?
 }
 
 struct CurrentTask: Decodable, Hashable {
@@ -205,7 +208,7 @@ final class AppModel {
             let list = try JSONDecoder().decode(PlanList.self, from: Data(output.utf8))
             notifyChanges(list.plans)
             plans = list.plans
-            if selection == nil { selection = plans.first?.id }
+            if selection == nil || !plans.contains(where: { $0.id == selection }) && ProcessInfo.processInfo.environment["NIGHTSHIFT_SELECT"] == nil { selection = selection ?? plans.first?.id }
             lastRefresh = Date()
             if errorMessage?.hasPrefix("Nightshift is not set up") == true { errorMessage = nil }
         } catch {
@@ -308,5 +311,21 @@ extension AppModel {
             errorMessage = error.localizedDescription
             return nil
         }
+    }
+}
+
+// `node src/cli.js effort --json`
+struct EffortSettings: Decodable, Equatable {
+    var min: String
+    var max: String
+    var reviewer: String
+    var planner: String
+    static let levels = ["low", "medium", "high", "xhigh", "max"]
+}
+
+extension AppModel {
+    func loadEffort() async -> EffortSettings? {
+        guard let output = try? await CLI.load().run(["effort", "--json"]) else { return nil }
+        return try? JSONDecoder().decode(EffortSettings.self, from: Data(output.utf8))
     }
 }

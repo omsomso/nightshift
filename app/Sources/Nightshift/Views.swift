@@ -4,6 +4,7 @@ import AppKit
 struct ContentView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.openSettings) private var openSettings
 
     var body: some View {
         @Bindable var model = model
@@ -16,7 +17,11 @@ struct ContentView: View {
             .navigationSplitViewColumnWidth(min: 240, ideal: 280)
             .onAppear {
                 // Development aid: NIGHTSHIFT_OPEN_STUDIO=1 opens Plan Studio at launch.
-                if ProcessInfo.processInfo.environment["NIGHTSHIFT_OPEN_STUDIO"] != nil { openWindow(id: "studio") }
+                let env = ProcessInfo.processInfo.environment
+                if env["NIGHTSHIFT_OPEN_STUDIO"] != nil { openWindow(id: "studio") }
+                // NIGHTSHIFT_SELECT=<plan id> selects a plan; NIGHTSHIFT_OPEN_SETTINGS=1 opens Accounts.
+                if let id = env["NIGHTSHIFT_SELECT"] { model.selection = id }
+                if env["NIGHTSHIFT_OPEN_SETTINGS"] != nil { openSettings() }
             }
             .toolbar {
                 Button { openWindow(id: "studio") } label: { Label("New Plan", systemImage: "plus") }
@@ -242,6 +247,7 @@ struct PlanDetail: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("\(index + 1). \(task.title)")
                         if let acceptance = task.acceptance { Text("Done when: \(acceptance)").font(.caption).foregroundStyle(.secondary) }
+                        DifficultyRow(plan: plan, task: task)
                         if task.status == "blocked", let reason = task.reason {
                             Text(reason).font(.caption).foregroundStyle(.red).lineLimit(6).textSelection(.enabled)
                         }
@@ -358,6 +364,34 @@ enum Snapshot {
                 }
             }
             NSApp.terminate(nil)
+        }
+    }
+}
+
+// The planner's difficulty rating (editable on drafts and before a task runs), and the
+// effort the task last ran at.
+struct DifficultyRow: View {
+    @Environment(AppModel.self) private var model
+    let plan: Plan
+    let task: PlanTask
+
+    var body: some View {
+        HStack(spacing: 8) {
+            if plan.status == "draft" || task.status == "ready" {
+                Picker("Difficulty", selection: Binding(get: { task.difficulty ?? "medium" }, set: { level in
+                    Task { await model.perform(["difficulty", task.id, level, "--plan", plan.id], for: plan.id) }
+                })) {
+                    Text("Low").tag("low"); Text("Medium").tag("medium"); Text("High").tag("high")
+                }
+                .pickerStyle(.segmented)
+                .fixedSize()
+                .controlSize(.small)
+                .help("Sets how much reasoning effort the worker starts with. Each retry goes one level higher.")
+            } else if let difficulty = task.difficulty {
+                Text("Rated \(difficulty)").font(.caption).foregroundStyle(.secondary)
+            }
+            if let reason = task.difficultyReason { Text(reason).font(.caption).foregroundStyle(.secondary).lineLimit(2) }
+            if let effort = task.effort, task.status != "draft" { Text("· ran at \(effort) effort").font(.caption).foregroundStyle(.secondary) }
         }
     }
 }

@@ -99,8 +99,9 @@ export const planSchema = {
     checks: { type: 'array', items: { type: 'string' } },
     allowedPaths: { type: 'array', items: { type: 'string' } },
     tasks: { type: 'array', items: { type: 'object', additionalProperties: false,
-      properties: { id: { type: 'string' }, title: { type: 'string' }, acceptance: { type: 'string' } },
-      required: ['id', 'title', 'acceptance'] } },
+      properties: { id: { type: 'string' }, title: { type: 'string' }, acceptance: { type: 'string' },
+        difficulty: { type: 'string', enum: ['low', 'medium', 'high'] }, difficultyReason: { type: 'string' } },
+      required: ['id', 'title', 'acceptance', 'difficulty', 'difficultyReason'] } },
     notes: { type: 'string' }
   },
   required: ['id', 'brief', 'checks', 'allowedPaths', 'tasks', 'notes']
@@ -117,6 +118,7 @@ export function plannerPrompt({ doc, steps, request, rules }) {
     'Rules:',
     '- One task per step, in the document\'s order. Do not invent, merge, split, or reorder steps. If a step is already done in the code, leave it out and say so in notes.',
     '- Each task: a short kebab-case id, a title, and acceptance criteria that a reviewer can check against the code and the checks.',
+    '- Rate each task\'s difficulty (low, medium, or high) from what you read in the code, with a one-line reason: low for small, local, well-understood changes; high for subtle or risky work (concurrency, real-time or audio threads, data migrations, security, wide refactors). It sets how much reasoning effort the worker starts with.',
     '- checks: commands that already exist in this repository (for example package scripts, make or ctest targets), run without network access, and pass today if you can tell. Prefer fast ones. At least one.',
     '- allowedPaths: the narrowest repository-relative prefixes (directories ending in /, or single files) the steps need, plus any file the agent instructions require updating alongside code changes (for example a roadmap or changelog); [""] only if the whole repository is truly needed.',
     '- If the agent instructions require such an update, say in the relevant task\'s acceptance criteria what to update.',

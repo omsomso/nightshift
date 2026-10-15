@@ -32,7 +32,7 @@ export const editSettings = {
     .map(sub => `Bash(git ${sub}:*)`)] }
 };
 
-export function claudeArgs({ sessionId, resume, outputSchema, model, maxBudgetUsd, edit = false, addDirs = [] }) {
+export function claudeArgs({ sessionId, resume, outputSchema, model, maxBudgetUsd, edit = false, addDirs = [], effort }) {
   const tools = edit ? editTools : readOnlyTools;
   return ['-p', '--output-format', 'stream-json', '--verbose',
     resume ? '--resume' : '--session-id', sessionId,
@@ -42,6 +42,7 @@ export function claudeArgs({ sessionId, resume, outputSchema, model, maxBudgetUs
     '--restricted', '--strict-mcp-config',
     ...(edit ? ['--settings', JSON.stringify(editSettings)] : []),
     ...addDirs.flatMap(dir => ['--add-dir', dir]),
+    ...(effort ? ['--effort', effort] : []),
     ...(model ? ['--model', model] : []),
     ...(maxBudgetUsd ? ['--max-budget-usd', String(maxBudgetUsd)] : [])];
 }
@@ -53,7 +54,7 @@ export class ClaudeSession {
     Object.assign(this, { cwd, model, maxBudgetUsd, timeoutMs, command, baseArgs, maxLineBytes, edit, addDirs });
   }
 
-  async run({ prompt, session, outputSchema, onEvent = () => {}, signal }) {
+  async run({ prompt, session, outputSchema, onEvent = () => {}, signal, effort }) {
     signal?.throwIfAborted();
     const emit = event => onEvent({ provider: 'claude', ...event });
     const resume = Boolean(session?.threadId);
@@ -63,7 +64,7 @@ export class ClaudeSession {
     emit({ type: 'dispatch-intent', threadId: sessionId });
 
     const child = spawn(this.command, [...this.baseArgs,
-      ...claudeArgs({ sessionId, resume, outputSchema, model: this.model, maxBudgetUsd: this.maxBudgetUsd, edit: this.edit, addDirs: this.addDirs })],
+      ...claudeArgs({ sessionId, resume, outputSchema, model: this.model, maxBudgetUsd: this.maxBudgetUsd, edit: this.edit, addDirs: this.addDirs, effort })],
       { cwd: this.cwd, env: subscriptionEnv(), stdio: ['pipe', 'pipe', 'pipe'], shell: false });
     const closed = new Promise(resolve => child.once('close', resolve));
     const lines = new JsonlDecoder({ label: 'Claude stream', maxLineBytes: this.maxLineBytes });
