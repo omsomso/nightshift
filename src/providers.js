@@ -135,12 +135,12 @@ export function checkProject(existing, project) {
 }
 
 // A read-only session for drafting a plan, with the same version and billing checks.
-export function buildPlanner(name, repository) {
+export function buildPlanner(name, repository, { folder = false, addDirs = [] } = {}) {
   if (!providers[name]) throw new Error(`Unknown provider ${name}. Use claude or codex.`);
-  const cwd = gitRoot(repository);
+  const cwd = folder ? realpathSync(resolve(repository)) : gitRoot(repository);
   const runtime = checkedRuntime(name);
   const auth = name === 'claude' ? requireSubscription(runtime.command) : requireChatgpt(runtime.command);
-  const options = providers[name].options(cwd, runtime.command, { timeoutMs: 600_000 });
+  const options = providers[name].options(cwd, runtime.command, { timeoutMs: 600_000, ...(addDirs.length ? { addDirs } : {}) });
   return { session: name === 'claude' ? new ClaudeSession(options) : new CodexSession(options),
     describe: `${name} ${runtime.version} [${auth}]` };
 }

@@ -298,13 +298,6 @@ struct ProvidersResponse: Decodable {
     let defaultAgents: String?
 }
 
-// `node src/cli.js chat --json` reply.
-struct ChatReply: Decodable {
-    let session: String?
-    let repo: String
-    let reply: String
-    let document: String?
-}
 
 extension AppModel {
     func loadProviders() async -> ProvidersResponse? {

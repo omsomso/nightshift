@@ -14,6 +14,10 @@ struct ContentView: View {
                 }
             }
             .navigationSplitViewColumnWidth(min: 240, ideal: 280)
+            .onAppear {
+                // Development aid: NIGHTSHIFT_OPEN_STUDIO=1 opens Plan Studio at launch.
+                if ProcessInfo.processInfo.environment["NIGHTSHIFT_OPEN_STUDIO"] != nil { openWindow(id: "studio") }
+            }
             .toolbar {
                 Button { openWindow(id: "studio") } label: { Label("New Plan", systemImage: "plus") }
                     .help("Plan new work with Claude, or draft from a document")
@@ -103,6 +107,7 @@ struct PlanDetail: View {
     @State private var confirmingMerge = false
     @State private var confirmingDelete = false
     @State private var report: String?
+    @State private var draftRoles = AgentRoles()
 
     private var busy: Bool { model.busy.contains(plan.id) }
 
@@ -174,7 +179,9 @@ struct PlanDetail: View {
         HStack(spacing: 10) {
             switch plan.status {
             case "draft":
-                Button { Task { await model.perform(["start", plan.id], for: plan.id) } } label: {
+                AgentRolesPicker(roles: $draftRoles)
+                    .onAppear { draftRoles = AgentRoles(spec: plan.agents) }
+                Button { Task { await model.perform(["start", plan.id, "--agents", draftRoles.spec], for: plan.id) } } label: {
                     Label("Approve and Start", systemImage: "play.fill")
                 }
                 .buttonStyle(.borderedProminent)
