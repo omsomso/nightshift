@@ -1,5 +1,6 @@
 import { BlockedError, BillingGuardError } from '../supervisor.js';
 import { RpcClient } from './rpc-client.js';
+import { codexEffort } from '../effort.js';
 
 // ChatGPT-plan-only billing. These variables can supply or redirect an API key, so none
 // reach Codex, and Codex itself is told to refuse API-key login. There is no opt-out.
@@ -23,7 +24,7 @@ export class CodexSession {
     this.createClient = createClient;
   }
 
-  async run({ prompt, session, outputSchema, onEvent = () => {}, signal }) {
+  async run({ prompt, session, outputSchema, onEvent = () => {}, signal, effort }) {
     signal?.throwIfAborted();
     const client = this.createClient();
     const emit = event => onEvent({ provider: 'codex', ...event });
@@ -68,7 +69,7 @@ export class CodexSession {
       // A synchronous persistence callback must succeed before turn/start is sent.
       emit({ type: 'session', threadId });
       inTurn = true;
-      return await this.turn(client, { threadId, prompt, outputSchema, emit, signal });
+      return await this.turn(client, { threadId, prompt, outputSchema, emit, signal, effort });
     } finally {
       signal?.removeEventListener('abort', onAbort);
       client.removeListener('serverRequest', blockOnRequest);
@@ -76,7 +77,7 @@ export class CodexSession {
     }
   }
 
-  async turn(client, { threadId, prompt, outputSchema, emit, signal }) {
+  async turn(client, { threadId, prompt, outputSchema, emit, signal, effort }) {
     let turnId;
     let buffer = [];
     let finalText = '';
@@ -159,7 +160,7 @@ export class CodexSession {
       emit({ type: 'dispatch-intent', threadId });
       const started = await Promise.race([client.request('turn/start', {
         threadId, input: [{ type: 'text', text: prompt }],
-        cwd: this.cwd, approvalPolicy: 'never', outputSchema,
+        cwd: this.cwd, approvalPolicy: 'never', outputSchema, ...(effort ? { effort: codexEffort(effort) } : {}),
         sandboxPolicy: this.edit ? { type: 'workspaceWrite', writableRoots: [], networkAccess: false } : { type: 'readOnly' }
       }), completion]);
       turnId = started?.turn?.id;

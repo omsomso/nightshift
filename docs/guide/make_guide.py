@@ -404,7 +404,12 @@ s += [PageBreak(), P('Kill switches', h1),
              ['A file outside the plan, or a protected file', 'always on', 'The task blocks (it is drifting).'],
              ['Fix-up rounds after a failed final review', '1', 'After one fix-up task, the plan blocks.']],
             [70 * mm, 32 * mm, FULL - 102 * mm]),
-      P('Limits are checked before each task starts, so the last task before a limit can go slightly over it.', small)]
+      P('Limits are checked before each task starts, so the last task before a limit can go slightly over it.', small),
+      P('Effort', h2),
+      P('The planner rates each task low, medium, or high. The worker starts at that effort and goes one level higher on every '
+        'retry, because a failure means the task was harder than rated. Reviewers stay at a fixed high level, so a low rating never '
+        'weakens a check. You set the bounds in Accounts or with ' + m('nightshift effort') + ', and can change any task\'s rating '
+        'on the draft (or ' + m('nightshift difficulty TASK high --plan ID') + ').')]
 
 # 8 — Troubleshooting
 s += [PageBreak(), P('Troubleshooting', h1),
@@ -451,6 +456,7 @@ nightshift pause --plan ID          # and: resume --plan ID
 nightshift interrupt --plan ID      # stop the running turn now
 nightshift retry TASK --plan ID     # after a blocker; then resume
 nightshift limit tokens 8000000 --plan ID
+nightshift difficulty TASK high --plan ID  # worker starts at more effort
 nightshift stop ID                  # and: start ID
 
 # finish

@@ -15,10 +15,10 @@ export class AgentWorker {
   constructor(provider, session) { this.provider = provider; this.session = session; }
 
   // With a plan (edit mode), the session must have been built with edit access.
-  async execute(task, { onEvent, signal, plan } = {}) {
+  async execute(task, { onEvent, signal, plan, effort } = {}) {
     if (plan && !this.session.edit) throw new BlockedError('Edit-mode plan, but the worker session is read-only.');
     return this.session.run({ session: savedSession(task, 'worker', this.provider), outputSchema: workerSchema,
-      onEvent, signal, prompt: plan ? editWorkerPrompt(task, plan) : workerPrompt(task) });
+      onEvent, signal, effort, prompt: plan ? editWorkerPrompt(task, plan) : workerPrompt(task) });
   }
 }
 
@@ -26,11 +26,11 @@ export class AgentReviewer {
   constructor(provider, session) { this.provider = provider; this.session = session; }
 
   // Reviewers are always read-only, also in edit mode.
-  async review(task, result, { onEvent, signal, plan, change, final = false } = {}) {
+  async review(task, result, { onEvent, signal, plan, change, final = false, effort } = {}) {
     if (this.session.edit) throw new BlockedError('Reviewer sessions must be read-only.');
     const prompt = final ? finalReviewPrompt(plan, change.planChange, change.checks)
       : plan ? editReviewerPrompt(task, result, change, plan) : reviewerPrompt(task, result);
     return this.session.run({ session: savedSession(task, 'reviewer', this.provider), outputSchema: reviewSchema,
-      onEvent, signal, prompt });
+      onEvent, signal, effort, prompt });
   }
 }

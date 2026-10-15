@@ -58,7 +58,7 @@ process.stdin.on('end', () => {
   }
   const isPlanner = JSON.parse(value('--json-schema')).required.includes('tasks');
   const result = isPlanner ? { id: 'Fixture Notes!', brief: 'Write two notes.', checks: ['node check.js'], allowedPaths: ['notes/'], notes: '',
-      tasks: [{ id: 'note-one', title: 'Write note one', acceptance: 'A first note exists.' }, { id: 'note-two', title: 'Write note two', acceptance: 'A second note exists.' }] }
+      tasks: [{ id: 'note-one', title: 'Write note one', acceptance: 'A first note exists.', difficulty: 'low', difficultyReason: 'One small file.' }, { id: 'note-two', title: 'Write note two', acceptance: 'A second note exists.', difficulty: 'high', difficultyReason: 'Pretend this is subtle.' }] }
     : isReview ? { passed: true, reason: 'Fixture review only.' }
     : { summary: 'Fixture résumé 🦉', evidence: ['fixture:README.md'] };
   // An unrelated session's result must not complete this turn.

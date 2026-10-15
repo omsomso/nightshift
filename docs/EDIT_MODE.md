@@ -58,6 +58,25 @@ forbids (commit, push, install, network) are listed as left for the owner. A den
 task; any other denied request still does. The report and the app list the rule files
 a plan used.
 
+## Effort
+
+Both CLIs take a reasoning-effort level per turn (Claude `--effort`: low, medium, high,
+xhigh, max; Codex `effort` on `turn/start`, where Nightshift sends low, medium, or high).
+Nightshift decides it deterministically (`src/effort.js`):
+
+- The planner rates each task's difficulty (low, medium, high) with a one-line reason.
+  That sets the worker's effort on the first attempt.
+- Each retry goes one level higher: a failed check or review means the task was harder
+  than rated.
+- Reviewers (per task and final) run at a fixed level, default high, so a low rating never
+  weakens a check. The planner and interviewer run at their own level, default high.
+- Everything stays within the owner's bounds (default medium to xhigh), set with
+  `nightshift effort set <min|max|reviewer|planner> <level>` or in the app's Accounts.
+  A plan snapshots these when it starts; a plan file may set its own `effort`.
+- The owner can change a task's rating on the draft (app, or
+  `nightshift difficulty <task> <level> --plan <id>`); on a running plan it applies from
+  the task's next attempt. The dispatch event and report record the effort used.
+
 ## Kill switches (all enforced by the controller)
 
 | Limit | Default | When hit |

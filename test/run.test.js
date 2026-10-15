@@ -206,3 +206,18 @@ test('interview from notes: picks the project, asks questions, then writes the r
   assert.equal(second.session, first.session);
   assert.match(second.document, /1\. Write note one\./);
 });
+
+test('drafts carry difficulty ratings the owner can change; effort settings are validated', t => {
+  const e = setupEnv(t);
+  e.cli('setup');
+  assert.match(e.cli('effort'), /within medium…xhigh[\s\S]*Reviewers: high/);
+  assert.match(e.cli('effort', 'set', 'reviewer', 'max'), /Reviewers: max/);
+  const bad = spawnSync(process.execPath, [cliFile, 'effort', 'set', 'min', 'max'], { cwd: e.repo, env: e.env, encoding: 'utf8' });
+  assert.match(bad.stderr, /min \(max\) is above max \(xhigh\)/);
+  const drafted = JSON.parse(e.cli('draft', 'docs/PLAN.md', '--json'));
+  assert.deepEqual(drafted.draft.plan.tasks.map(task => task.difficulty), ['low', 'high']);
+  assert.match(e.cli('draft', 'docs/PLAN.md'), /\[high: Pretend this is subtle\.\]/);
+  assert.match(e.cli('difficulty', 'note-two', 'medium', '--plan', drafted.id), /Draft updated/);
+  const listed = e.json().plans.find(p => p.id === drafted.id);
+  assert.equal(listed.tasks[1].difficulty, 'medium');
+});

@@ -82,7 +82,9 @@ function planSection(state) {
     const last = state.events.findLast(e => e.taskId === task.id && e.type === 'checks');
     return !last ? 'no checks yet' : last.detail?.passed ? 'checks passed' : 'checks failed';
   };
-  out.push('', 'Tasks:', ...state.tasks.map(t => `- **${t.title}** (\`${t.id}\`) — ${t.status}; ${t.attempts} attempt(s); ${checks(t)}`));
+  out.push('', 'Tasks:', ...state.tasks.map(t => `- **${t.title}** (\`${t.id}\`) — ${t.status}; ${t.attempts} attempt(s)` +
+    `${t.difficulty ? `; rated ${t.difficulty}` : ''}${t.effort ? `; last run at ${t.effort} effort` : ''}; ${checks(t)}`));
+  if (plan.effort) out.push(`Effort: workers ${plan.effort.min}…${plan.effort.max} by difficulty, +1 per retry; reviewers ${plan.effort.reviewer}.`);
   const commits = state.tasks.filter(t => t.commit).map(t => `- \`${t.commit.slice(0, 12)}\` ${t.title}`);
   if (commits.length) out.push('', 'Commits:', ...commits);
   if (plan.status === 'awaiting-approval') {

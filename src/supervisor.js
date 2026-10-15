@@ -1,3 +1,5 @@
+import { workerEffort, reviewerEffort } from './effort.js';
+
 export class BlockedError extends Error {}
 // Both of these block the task and pause the whole queue.
 // A billing problem affects every task, not just this one.
@@ -33,14 +35,14 @@ export class Supervisor {
     this.state.events.push({ taskId, type, detail, at: new Date().toISOString() });
   }
 
-  add({ id, title, acceptance, dependencies = [], maxAttempts = 2 }) {
+  add({ id, title, acceptance, dependencies = [], maxAttempts = 2, difficulty }) {
     if (!id || !title || !acceptance) throw new Error('id, title, and acceptance are required.');
     if (this.state.tasks.some(task => task.id === id)) throw new Error('Duplicate task ID.');
     if (!Number.isInteger(maxAttempts) || maxAttempts < 1) throw new Error('maxAttempts must be a positive integer.');
     if (!Array.isArray(dependencies) || dependencies.some(dep => !this.state.tasks.some(task => task.id === dep))) {
       throw new Error('Dependencies must name existing tasks.');
     }
-    this.state.tasks.push({ id, title, acceptance, dependencies: [...dependencies], maxAttempts, attempts: 0, status: 'ready' });
+    this.state.tasks.push({ id, title, acceptance, dependencies: [...dependencies], maxAttempts, attempts: 0, status: 'ready', ...(difficulty ? { difficulty } : {}) });
     this.record(id, 'created', title);
     this.store.save(this.state);
   }
@@ -95,12 +97,25 @@ export class Supervisor {
         else if (command.type === 'retry') this.retry(command.payload?.id);
         else if (command.type === 'interrupt') this.interrupt();
         else if (command.type === 'limit') this.setLimit(command.payload?.name, command.payload?.value);
+        else if (command.type === 'difficulty') this.setDifficulty(command.payload?.id, command.payload?.level);
         else throw new Error('Unknown command.');
       } catch (error) {
         this.record(command.payload?.id ?? null, 'command-rejected', `${command.type}: ${error.message}`);
         this.store.save(this.state);
       }
     }
+  }
+
+  // The owner's difficulty rating for a task; future attempts start from it.
+  setDifficulty(id, level) {
+    const task = this.state.tasks.find(candidate => candidate.id === id);
+    if (!task) throw new Error(`Unknown task ${id}.`);
+    if (!['low', 'medium', 'high'].includes(level)) throw new Error('Difficulty must be low, medium, or high.');
+    task.difficulty = level;
+    const planned = this.state.plan?.tasks?.find(candidate => candidate.id === id);
+    if (planned) planned.difficulty = level;
+    this.record(id, 'difficulty-changed', level);
+    this.store.save(this.state);
   }
 
   // The owner may raise or lower a plan limit, for example after one was reached.
@@ -171,7 +186,9 @@ export class Supervisor {
     this.busy = true;
     const abort = new AbortController();
     this.current = { task, abort };
-    const context = role => ({ onEvent: this.observer(task, role), signal: abort.signal, plan: this.state.plan });
+    // Effort applies in plan mode, where the plan carries the owner's effort settings.
+    const effortFor = role => this.state.plan?.effort ? (role === 'worker' ? workerEffort(task, this.state.plan.effort) : reviewerEffort(this.state.plan.effort)) : undefined;
+    const context = role => ({ onEvent: this.observer(task, role), signal: abort.signal, plan: this.state.plan, effort: effortFor(role) });
     try {
       if (task.attempts >= task.maxAttempts) {
         task.status = 'blocked';
@@ -182,7 +199,9 @@ export class Supervisor {
       }
       task.status = 'running';
       task.attempts += 1;
-      this.record(task.id, 'dispatched', `Attempt ${task.attempts}`);
+      const effort = effortFor('worker');
+      if (effort) task.effort = effort;
+      this.record(task.id, 'dispatched', `Attempt ${task.attempts}${effort ? ` at ${effort} effort` : ''}`);
       this.store.save(this.state);
 
       let result;
@@ -306,7 +325,8 @@ export class Supervisor {
       const commits = this.state.tasks.map(t => `${t.commit?.slice(0, 12)} ${t.title}`);
       const review = await this.reviewer.review({ id: plan.final.id, title: `Whole plan: ${plan.id}`, acceptance: plan.brief },
         { summary: `All ${plan.tasks.length} tasks committed`, evidence: commits },
-        { onEvent: this.observer(plan.final, 'reviewer'), signal: abort.signal, plan, change: { planChange, checks }, final: true });
+        { onEvent: this.observer(plan.final, 'reviewer'), signal: abort.signal, plan, change: { planChange, checks }, final: true,
+          effort: plan.effort ? reviewerEffort(plan.effort) : undefined });
       if (abort.signal.aborted) throw abort.signal.reason;
       if (!review || typeof review.passed !== 'boolean' || typeof review.reason !== 'string' || !review.reason.trim()) {
         return stop('Final reviewer did not provide a valid decision and reason.');
