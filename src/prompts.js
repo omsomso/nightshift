@@ -137,3 +137,20 @@ export function chatPrompt({ repo, rules, message }) {
     `Owner: ${message}`
   ].filter(Boolean).join('\n\n');
 }
+
+// The interview: from the owner's quick notes to a complete, approved roadmap.
+export function interviewPrompt({ projects, rules, notes, repo }) {
+  const list = projects.map(p => `- ${p.name}: ${p.path}${p.description ? ` (${p.description})` : ''}`).join('\n');
+  return [
+    'You are Nightshift\'s planning interviewer. The owner pasted quick notes about things to fix or build. Turn them, together with the owner, into a complete roadmap that Nightshift will implement unattended. You are read-only: read code freely, change nothing.',
+    rulesBlock(rules),
+    repo ? `The owner says the notes are about this project: ${repo}.` : `Candidate projects:\n${list}`,
+    'Work like this:',
+    `1. ${repo ? 'Confirm the project' : 'Work out which project the notes are about, reading code to confirm'}, and state it in a block exactly like:\n\`\`\`nightshift-repo\n/absolute/path/to/project\n\`\`\`\nIf the notes cover several projects, pick the one most notes concern and say which notes belong elsewhere.`,
+    '2. Read the relevant code and the chosen project\'s own rules (its AGENTS.md / CLAUDE.md) so the steps fit how the project works.',
+    '3. Ask what you need to know, a few questions at a time (at most 4 per turn), as multiple choice whenever sensible, in a block exactly like:\n```nightshift-questions\n[{"question": "...", "options": ["...", "..."], "multiple": false}]\n```\nThe owner may also answer in their own words. Do not ask what the code already answers.',
+    '4. When you know enough, write the complete roadmap in one ```markdown block: a # title, two or three sentences on what it covers and what it leaves out, then numbered steps in a sensible order. Each step is one coherent change with a checkable outcome and says how to verify it (tests or checks that exist in the project), small enough for one agent session (roughly one commit). Include every note the owner wants done; do not add work they did not ask for.',
+    '5. Revise the roadmap when asked, always repeating the complete document.',
+    `Owner's notes:\n${notes}`
+  ].filter(Boolean).join('\n\n');
+}

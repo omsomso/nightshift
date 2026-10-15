@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, existsSync, realpathSync } from 'node:fs';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -189,4 +189,20 @@ test('plan chat keeps one conversation and extracts the plan document', t => {
   assert.match(second.document, /2\. Write note two\./);
   const status = JSON.parse(e.cli('providers', '--json'));
   assert.deepEqual(status.providers.map(p => [p.name, p.enabled, p.signedIn]), [['codex', true, true], ['claude', true, true]]);
+});
+
+test('interview from notes: picks the project, asks questions, then writes the roadmap', t => {
+  const e = setupEnv(t);
+  e.cli('setup');
+  e.cli('workspaces', 'set', e.root);
+  const listed = JSON.parse(e.cli('projects', '--json'));
+  assert.ok(listed.projects.some(p => p.path === e.repo && p.name === 'repo'));
+  const first = JSON.parse(e.cli('chat', '--notes', '--message', 'notes: two notes please, keep them short'));
+  assert.equal(realpathSync(first.repo), realpathSync(e.repo), 'the interviewer picked the project');
+  assert.deepEqual(first.questions, [{ question: 'Keep notes short?', multiple: false, options: ['Yes', 'No'] }]);
+  assert.doesNotMatch(first.reply, /nightshift-(repo|questions)/, 'machine blocks are not shown as text');
+  const second = JSON.parse(e.cli('chat', '--session', first.session, '--cwd', first.cwd, '--repo', first.repo, '--with-rules',
+    '--message', 'Keep notes short?: Yes'));
+  assert.equal(second.session, first.session);
+  assert.match(second.document, /1\. Write note one\./);
 });

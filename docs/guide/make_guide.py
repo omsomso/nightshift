@@ -265,8 +265,8 @@ node src/cli.js setup     # first time only; afterwards: nightshift setup'''),
 # 3 — Running a plan
 s += [PageBreak(), P('Run a plan from your docs', h1),
       P('There are three ways in, all ending in the same plan:'),
-      *bullets(['<b>The app:</b> New Plan opens Plan Studio, where you talk the work through with Claude and it writes the plan '
-                'document for you (see The Nightshift app).',
+      *bullets(['<b>The app:</b> New Plan opens Plan Studio. Paste your quick notes; Claude works out the project, asks you a few '
+                'multiple-choice questions, and writes the roadmap (see The Nightshift app).',
                 '<b>Any Claude or Codex session:</b> "use Nightshift to implement steps 1-5 of docs/ROADMAP.md".',
                 '<b>The terminal</b>, with the steps in a document you already have:']),
       code('''nightshift run ~/CodexProjects/my-project/docs/ROADMAP.md --steps "1-10"'''),
@@ -336,22 +336,20 @@ s += [PageBreak(), P('The Nightshift app', h1),
              ['Its source', m('~/CodexProjects/nightshift/app/') + ' (SwiftUI)'],
              ['Open it', m('open ~/CodexProjects/nightshift/app/build/Nightshift.app') + ', or double-click it in Finder.'],
              ['Keep it handy', 'Drag it into /Applications (or the Dock). It keeps working from there.'],
-             ['Rebuild it', m('~/CodexProjects/nightshift/app/build.sh') + ' after pulling app changes.'],
-             ['Its icon', 'A night-blue tile with an amber crescent moon.']],
+             ['Rebuild it', m('~/CodexProjects/nightshift/app/build.sh') + ' after pulling app changes.']],
             [32 * mm, FULL - 32 * mm], header=False),
-      P('The app reads the settings that ' + m('setup') + ' saved, so run setup once before opening it. It does no '
-        'orchestration itself: every button runs the matching command, so the app and the terminal always agree.'),
+      P('Run ' + m('setup') + ' once before opening it. Every button runs the matching command, so the app and the terminal agree.'),
       P('What you can do in it', h2),
       table([['Where', 'What'],
              ['Sidebar', 'Every plan with a status icon and progress (for example 4/10).'],
              ['Plan view', 'The brief, repository, branch, agents, runner state, each task with its "done when" criteria, '
               'commits, blockers in red, the final review, limits as bars, and the last log lines.'],
-             ['Buttons', 'Approve and Start (drafts), Pause / Resume, Stop Turn, Start / Stop Runner, Retry, Open Worktree, '
+             ['Buttons', 'Approve and Start (drafts, with Works / Reviews pickers), Pause / Resume, Stop Turn, Start / Stop Runner, Retry, Open Worktree, '
               'Report, and Approve and Merge (with a confirmation).'],
-             ['Plan Studio', 'New Plan (+). Choose a repository and describe the work. Claude reads the code and the project\'s '
-              'rules (it cannot change anything) and writes a plan document with numbered steps on the right, where you can edit it. '
-              'Save and Draft Plan writes it into the repository and drafts the plan; nothing runs until you press Approve and Start. '
-              'Open Document drafts from a file you already have.'],
+             ['Plan Studio', 'New Plan (+). Paste your notes, quick and messy, and press Start Interview. Claude finds the project in '
+              'your workspace, reads its code and rules (it cannot change anything), asks multiple-choice questions you answer with a '
+              'click or your own words, and writes the roadmap on the right, where you can edit it. Pick who works and who reviews. '
+              'Save and Draft Plan writes it into the project and drafts the plan; nothing runs until you press Approve and Start.'],
              ['Accounts', 'Cmd-comma. Each provider\'s version, sign-in (a Sign In button opens your browser; subscription only), '
               'an on/off switch, and Run Setup.'],
              ['Menu bar', 'The moon icon lists plans and opens the window. It fills in when a plan needs you.'],

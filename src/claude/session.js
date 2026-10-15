@@ -32,7 +32,7 @@ export const editSettings = {
     .map(sub => `Bash(git ${sub}:*)`)] }
 };
 
-export function claudeArgs({ sessionId, resume, outputSchema, model, maxBudgetUsd, edit = false }) {
+export function claudeArgs({ sessionId, resume, outputSchema, model, maxBudgetUsd, edit = false, addDirs = [] }) {
   const tools = edit ? editTools : readOnlyTools;
   return ['-p', '--output-format', 'stream-json', '--verbose',
     resume ? '--resume' : '--session-id', sessionId,
@@ -41,15 +41,16 @@ export function claudeArgs({ sessionId, resume, outputSchema, model, maxBudgetUs
     '--permission-mode', 'dontAsk', '--permission-prompts', 'none',
     '--restricted', '--strict-mcp-config',
     ...(edit ? ['--settings', JSON.stringify(editSettings)] : []),
+    ...addDirs.flatMap(dir => ['--add-dir', dir]),
     ...(model ? ['--model', model] : []),
     ...(maxBudgetUsd ? ['--max-budget-usd', String(maxBudgetUsd)] : [])];
 }
 
 // One headless `claude -p` process per turn. The prompt goes over stdin, never argv.
 export class ClaudeSession {
-  constructor({ cwd, model, maxBudgetUsd, timeoutMs = 300_000, command = 'claude', baseArgs = [], maxLineBytes = 4_194_304, edit = false }) {
+  constructor({ cwd, model, maxBudgetUsd, timeoutMs = 300_000, command = 'claude', baseArgs = [], maxLineBytes = 4_194_304, edit = false, addDirs = [] }) {
     if (!cwd) throw new Error('A project directory is required.');
-    Object.assign(this, { cwd, model, maxBudgetUsd, timeoutMs, command, baseArgs, maxLineBytes, edit });
+    Object.assign(this, { cwd, model, maxBudgetUsd, timeoutMs, command, baseArgs, maxLineBytes, edit, addDirs });
   }
 
   async run({ prompt, session, outputSchema, onEvent = () => {}, signal }) {
@@ -62,7 +63,7 @@ export class ClaudeSession {
     emit({ type: 'dispatch-intent', threadId: sessionId });
 
     const child = spawn(this.command, [...this.baseArgs,
-      ...claudeArgs({ sessionId, resume, outputSchema, model: this.model, maxBudgetUsd: this.maxBudgetUsd, edit: this.edit })],
+      ...claudeArgs({ sessionId, resume, outputSchema, model: this.model, maxBudgetUsd: this.maxBudgetUsd, edit: this.edit, addDirs: this.addDirs })],
       { cwd: this.cwd, env: subscriptionEnv(), stdio: ['pipe', 'pipe', 'pipe'], shell: false });
     const closed = new Promise(resolve => child.once('close', resolve));
     const lines = new JsonlDecoder({ label: 'Claude stream', maxLineBytes: this.maxLineBytes });

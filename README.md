@@ -67,6 +67,11 @@ to every agent, whether you start the plan from a terminal, a Claude or Codex se
 or the app. Where a project's rules ask for something Nightshift forbids (commit, push,
 install, network), Nightshift wins and the agent lists it as left for you.
 
+**From quick notes.** In the app, New Plan takes your pasted notes: Claude finds the
+project in your workspace (`nightshift projects`), interviews you with multiple-choice
+questions, and writes the roadmap; you approve before anything runs. The same works from
+the terminal (`nightshift chat --notes`) and from any Claude or Codex chat via the skill.
+
 For a window and menu-bar view with notifications, build the app (see `app/README.md`):
 
 ```sh

@@ -16,6 +16,7 @@ import { draftPlan } from './planner.js';
 import { home, planDir, readConfig, writeConfig, freePlanId } from './home.js';
 import { installIntegration } from './install.js';
 import { chatTurn } from './chat.js';
+import { listProjects, workspaceRoots } from './projects.js';
 import { spawnSync } from 'node:child_process';
 import { createPlan, saveDraft, startPlan, stopRunner, mergePlan, discardPlan, summarize, listPlans } from './plans.js';
 
@@ -29,7 +30,10 @@ const usage = `Usage: node src/cli.js <command> [options]
   start <id> | stop <id>       Start or stop a plan's background runner
   providers [--json]           Installed versions, pins, sign-ins, and on/off for each provider
   login <provider>             Sign in with a subscription (claude.ai, ChatGPT); opens the browser
-  chat --repo path --message t Plan chat: Claude helps write the plan document [--session id] (JSON reply)
+  chat --notes --message t     Interview from notes: Claude picks the project, asks questions, writes the roadmap
+  chat --repo path --message t Plan chat about one repository [--session id --cwd dir] (JSON reply)
+  projects [--json]            Projects found in the workspace roots
+  workspaces [set|add|remove p] Where Nightshift looks for projects (default: the folder holding Nightshift)
   disable <provider>           Turn claude or codex off: Nightshift will not start it (enable to undo)
   enable <provider>            Turn it back on
   list [--json]                All plans in ~/.nightshift/plans with progress
@@ -58,7 +62,7 @@ const { values, positionals } = parseArgs({ allowPositionals: true, options: {
   'max-dispatches': { type: 'string', default: '20' }, 'poll-seconds': { type: 'string', default: '30' },
   id: { type: 'string' }, title: { type: 'string' }, acceptance: { type: 'string' }, after: { type: 'string' },
   'max-attempts': { type: 'string', default: '2' }, since: { type: 'string' }, help: { type: 'boolean' },
-  plan: { type: 'string' }, message: { type: 'string' }, session: { type: 'string' }, steps: { type: 'string' }, request: { type: 'string' }, yes: { type: 'boolean' }, json: { type: 'boolean' },
+  plan: { type: 'string' }, message: { type: 'string' }, session: { type: 'string' }, notes: { type: 'boolean' }, cwd: { type: 'string' }, 'with-rules': { type: 'boolean' }, steps: { type: 'string' }, request: { type: 'string' }, yes: { type: 'boolean' }, json: { type: 'boolean' },
   lines: { type: 'string', default: '40' }, base: { type: 'string' }
 } });
 const [command = 'status', argument] = positionals;
@@ -317,12 +321,32 @@ function login() {
 }
 
 async function chat() {
-  if (!values.repo) throw new Error('chat requires --repo <path>.');
-  console.log(JSON.stringify(await chatTurn({ repo: values.repo, session: values.session, message: values.message })));
+  if (!values.repo && !values.notes && !values.session) throw new Error('chat requires --notes (interview from notes) or --repo <path>.');
+  console.log(JSON.stringify(await chatTurn({ repo: values.repo, session: values.session, message: values.message,
+    notes: values.notes, cwd: values.cwd, withRules: values['with-rules'] })));
+}
+
+function projects() {
+  const list = listProjects();
+  if (values.json) return console.log(JSON.stringify({ workspaces: workspaceRoots(), projects: list }));
+  for (const p of list) console.log(`${p.name.padEnd(22)} ${p.description}`);
+}
+
+// Workspace roots: where the interviewer looks for projects.
+function workspaces() {
+  const [, action, path] = positionals;
+  const config = readConfig();
+  const roots = new Set(config.workspaces ?? workspaceRoots());
+  if (action === 'set' && path) { roots.clear(); roots.add(resolve(path)); }
+  else if (action === 'add' && path) roots.add(resolve(path));
+  else if (action === 'remove' && path) roots.delete(resolve(path));
+  else if (action) throw new Error('Use: workspaces [set <path> | add <path> | remove <path>]');
+  if (action) { config.workspaces = [...roots]; writeConfig(config); }
+  console.log([...roots].join('\n'));
 }
 
 const commands = {
-  demo, serve, add, plan, setup, draft, run, list, providers, login, chat,
+  demo, serve, add, plan, setup, draft, run, list, providers, login, chat, projects, workspaces,
   disable: () => toggleProvider(false),
   enable: () => toggleProvider(true), logs, discard,
   start: () => start(),

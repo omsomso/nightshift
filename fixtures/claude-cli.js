@@ -40,6 +40,10 @@ process.stdin.on('end', () => {
     model: 'fixture-model', permissionMode: 'dontAsk', apiKeySource: mode === 'api-key' ? 'ANTHROPIC_API_KEY' : 'none', tools: ['Read', 'Grep', 'Glob'],
     resumed: has('--resume') });
   if (mode === 'stall' || mode === 'api-key') return setInterval(() => {}, 1000); // api-key: must be killed, not awaited
+  if (!value('--json-schema') && input.includes('pasted quick notes')) {
+    const reply = 'These notes are about the repo project.\n```nightshift-repo\n' + process.cwd() + '/repo\n```\nA question first:\n```nightshift-questions\n[{"question": "Keep notes short?", "options": ["Yes", "No"], "multiple": false}]\n```';
+    return send({ type: 'result', subtype: 'success', is_error: false, ...ids, result: reply, usage: { input_tokens: 5, output_tokens: 5 }, permission_denials: [] });
+  }
   if (!value('--json-schema')) {
     const reply = has('--resume') ? 'Revised:\n```markdown\n# Plan\n\n1. Write note one.\n2. Write note two.\n```'
       : 'A first draft:\n```markdown\n# Plan\n\n1. Write note one.\n```\nShall I add more?';

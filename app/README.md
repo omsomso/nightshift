@@ -2,11 +2,14 @@
 
 The macOS entry point to Nightshift: a window, a menu-bar icon, and notifications.
 
-- **Plan Studio** (New Plan): choose a repository and talk the work through with Claude,
-  which reads the code and the project's rules (read-only) and writes a plan document
-  with numbered steps. Edit it in the right-hand pane, then Save and Draft Plan writes it
-  into the repository and drafts a Nightshift plan from it. Open Document… drafts from
-  a document you already have.
+- **Plan Studio** (New Plan): paste your quick notes and press Start Interview. Claude
+  (read-only) works out which project in your workspace they are about, reads the code
+  and the project's rules, asks a few multiple-choice questions (click the options, or
+  answer in your own words), and writes the complete roadmap in the right-hand pane,
+  where you can edit it. Save and Draft Plan writes it into the project and drafts the
+  plan. Choose who works and who reviews (Codex is listed even when turned off). Open an
+  Existing Document… drafts from a file you already have.
+- **Drafts** can switch who works and who reviews before Approve and Start.
 - **Plans**: every plan in `~/.nightshift/plans` with progress, blockers, limits, project
   rules, and the runner log; Approve and Start, Pause/Resume, Stop Turn, Start/Stop
   Runner, Retry, Open Worktree, Report, and Approve and Merge (with confirmation).
@@ -30,8 +33,9 @@ because the Command Line Tools' `swift-package` on this Mac failed to load (a li
 mismatch). Copy the app to /Applications if you want it in Launchpad. The icon is drawn by
 `app/icon/make_icon.swift`; run `app/icon/make-icns.sh` to rebuild `Resources/AppIcon.icns`.
 
-`NIGHTSHIFT_SNAPSHOT=<dir>` renders each plan's view to PNG and quits (a development
-aid; native controls appear as placeholders in those images).
+Development aids: `NIGHTSHIFT_SNAPSHOT=<dir>` renders each plan's view to PNG and quits
+(native controls appear as placeholders); `NIGHTSHIFT_OPEN_STUDIO=1` opens Plan Studio at
+launch, and `NIGHTSHIFT_STUDIO_DEMO=1` fills it with a sample conversation.
 
 ## Verified
 
@@ -39,5 +43,7 @@ aid; native controls appear as placeholders in those images).
 against fixture plans. 2026-10-15: Plan Studio, Accounts, and the icon build cleanly;
 the CLI commands behind them (`chat`, `providers`, `login`, `enable`/`disable`,
 `setup`, `draft`) are covered by the Node tests, and a live plan-chat turn returned
-project rules correctly. The new windows' on-screen layout has not been checked by the
-developer (no screen access); check Plan Studio and Accounts after building.
+project rules correctly. The owner checked Plan Studio and Accounts on screen. 2026-10-15 (later): the notes-first
+Plan Studio was screenshotted in both phases (intake, and a sample interview with question
+chips and the roadmap pane); a live interview turn picked the right project from the
+workspace and returned four structured questions.

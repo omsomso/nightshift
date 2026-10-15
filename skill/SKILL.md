@@ -13,6 +13,28 @@ waits for the owner's merge. Project rules (AGENTS.md, CLAUDE.md) are passed to 
 agents automatically; Nightshift's own limits win where they conflict (its agents never
 commit, push, install, or use the network).
 
+## From quick notes to a roadmap
+
+The owner often pastes quick, messy notes ("reverb tail clicks on bypass", "preset browser
+should remember the folder", ...) and wants them turned into a complete roadmap. Do this
+with them before drafting anything:
+
+1. Work out which project the notes are about. `nightshift projects` lists the projects
+   in the owner's workspace with a one-line description; read code to confirm, and tell
+   the owner which project you picked. If notes span several projects, say which belong
+   elsewhere and plan one project at a time.
+2. Read the relevant code and the project's rules (AGENTS.md, CLAUDE.md).
+3. Ask what the code cannot answer, a few questions at a time, as multiple choice where
+   sensible (use your question tool if you have one). Do not ask what the code settles.
+4. Write the complete roadmap into the project, for example `docs/plans/<topic>.md`: a
+   title, two or three sentences on scope, then numbered steps in order, each one
+   coherent change with a checkable outcome and how to verify it, small enough for one
+   agent session. Include every note the owner wants done and nothing they did not ask
+   for. Show it and revise until the owner is happy.
+5. Continue with "Starting a plan" below, drafting from that document.
+
+The Nightshift app's New Plan window runs this same interview, if the owner prefers it.
+
 ## Starting a plan
 
 1. Make sure the steps exist in a document in the repository (for example
@@ -21,10 +43,12 @@ commit, push, install, or use the network).
 2. Draft, do not start yet:
 
    ```sh
-   nightshift draft <path/to/doc.md> [--steps "1-10"] [--request "extra guidance"]
+   nightshift draft <path/to/doc.md> [--steps "1-10"] [--agents claude:codex]
    ```
 
    It prints the drafted tasks, checks, allowed paths, limits, and planner notes.
+   `--agents worker:reviewer` chooses who works and who reviews (claude, codex); the
+   default follows which providers are turned on.
 3. Show the draft to the user and ask whether to start it. Only start when they say so:
 
    ```sh
