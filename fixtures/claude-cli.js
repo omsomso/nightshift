@@ -30,7 +30,7 @@ process.stdin.on('end', () => {
   const leaked = Object.keys(process.env).filter(name => name.startsWith('ANTHROPIC_') || name.startsWith('CLAUDE_CODE_USE_'));
   if (leaked.length) return fail(`Billing variables leaked: ${leaked.join(', ')}`);
   if (!sessionId) return fail('Expected a session ID');
-  if (!/Task/.test(input)) return fail('Expected the prompt on stdin');
+  if (!input.trim()) return fail('Expected the prompt on stdin');
   if (mode === 'malformed') return process.stdout.write('this is not JSON\n');
   if (mode === 'oversize') return process.stdout.write('x'.repeat(5000));
   if (mode === 'disconnect') return process.exit(3);
@@ -40,6 +40,11 @@ process.stdin.on('end', () => {
     model: 'fixture-model', permissionMode: 'dontAsk', apiKeySource: mode === 'api-key' ? 'ANTHROPIC_API_KEY' : 'none', tools: ['Read', 'Grep', 'Glob'],
     resumed: has('--resume') });
   if (mode === 'stall' || mode === 'api-key') return setInterval(() => {}, 1000); // api-key: must be killed, not awaited
+  if (!value('--json-schema')) {
+    const reply = has('--resume') ? 'Revised:\n```markdown\n# Plan\n\n1. Write note one.\n2. Write note two.\n```'
+      : 'A first draft:\n```markdown\n# Plan\n\n1. Write note one.\n```\nShall I add more?';
+    return send({ type: 'result', subtype: 'success', is_error: false, ...ids, result: reply, usage: { input_tokens: 5, output_tokens: 5 }, permission_denials: [] });
+  }
   const isReview = JSON.parse(value('--json-schema')).required.includes('passed');
   // An edit-mode worker changes one file per task, as a real agent would.
   if (editMode && !isReview) {
@@ -65,6 +70,7 @@ process.stdin.on('end', () => {
       total_cost_usd: 0.0123, usage: { input_tokens: 10, output_tokens: 5 }, permission_denials: [],
       result: JSON.stringify(result), structured_output: result };
     if (mode === 'denial') final.permission_denials = [{ tool_name: 'Bash', tool_use_id: 'toolu_2', tool_input: { command: 'rm -rf build' } }];
+    if (mode === 'git-denial') final.permission_denials = [{ tool_name: 'Bash', tool_use_id: 'toolu_3', tool_input: { command: 'git commit -am "step done"' } }];
     if (mode === 'error-result') Object.assign(final, { subtype: 'error_max_turns', is_error: true, result: undefined, structured_output: undefined });
     if (mode === 'bad-output') Object.assign(final, { result: 'not JSON', structured_output: undefined });
     if (mode === 'text-result') final.structured_output = undefined;

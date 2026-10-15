@@ -3,7 +3,7 @@ import AppKit
 
 struct ContentView: View {
     @Environment(AppModel.self) private var model
-    @State private var showingNewPlan = false
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         @Bindable var model = model
@@ -15,8 +15,10 @@ struct ContentView: View {
             }
             .navigationSplitViewColumnWidth(min: 240, ideal: 280)
             .toolbar {
-                Button { showingNewPlan = true } label: { Label("New Plan", systemImage: "plus") }
-                    .help("Draft a plan from a document in a repository")
+                Button { openWindow(id: "studio") } label: { Label("New Plan", systemImage: "plus") }
+                    .help("Plan new work with Claude, or draft from a document")
+                SettingsLink { Label("Accounts", systemImage: "person.crop.circle") }
+                    .help("Providers, sign-ins, and setup")
             }
         } detail: {
             VStack(spacing: 0) {
@@ -26,12 +28,16 @@ struct ContentView: View {
                 if let plan = model.selectedPlan {
                     PlanDetail(plan: plan)
                 } else {
-                    ContentUnavailableView("No plan selected", systemImage: "moon.stars",
-                                           description: Text("Draft one from a document with New Plan."))
+                    ContentUnavailableView {
+                        Label("No plan selected", systemImage: "moon.stars")
+                    } description: {
+                        Text("Plan new work with Claude, or draft from a document you already have.")
+                    } actions: {
+                        Button("New Plan") { openWindow(id: "studio") }.buttonStyle(.borderedProminent)
+                    }
                 }
             }
         }
-        .sheet(isPresented: $showingNewPlan) { NewPlanSheet() }
     }
 }
 
@@ -158,6 +164,7 @@ struct PlanDetail: View {
                 if let branch = plan.branch { GridRow { Text("Branch").foregroundStyle(.secondary); Text(branch).textSelection(.enabled) } }
                 if let agents = plan.agents { GridRow { Text("Agents").foregroundStyle(.secondary); Text(agents.replacingOccurrences(of: ":", with: " works, ") + " reviews") } }
                 if plan.status != "draft" { GridRow { Text("Runner").foregroundStyle(.secondary); Text(plan.runner ? "running in the background" : "stopped") } }
+                if let rules = plan.rules { GridRow { Text("Project rules").foregroundStyle(.secondary); Text(rules.isEmpty ? "none found" : rules.joined(separator: ", ")) } }
             }
             .font(.callout)
         }
@@ -314,63 +321,6 @@ struct ReportSheet: View {
             HStack { Spacer(); Button("Done") { dismiss() }.keyboardShortcut(.defaultAction) }.padding()
         }
         .frame(minWidth: 720, minHeight: 520)
-    }
-}
-
-struct NewPlanSheet: View {
-    @Environment(AppModel.self) private var model
-    @Environment(\.dismiss) private var dismiss
-    @State private var document = ""
-    @State private var steps = ""
-    @State private var request = ""
-    @State private var choices = AgentChoice.available()
-    @State private var agents = AgentChoice.available().first?.spec ?? "claude"
-
-    private var drafting: Bool { model.busy.contains("new-plan") }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("New Plan").font(.title2.bold())
-            Text("An agent reads the document and drafts a plan with one task per step. Nothing runs until you approve the draft.")
-                .foregroundStyle(.secondary)
-            Form {
-                HStack {
-                    TextField("Document", text: $document, prompt: Text("/path/to/repository/docs/PLAN.md"))
-                    Button("Choose…") { chooseDocument() }
-                }
-                TextField("Steps (optional)", text: $steps, prompt: Text("for example: steps 1–10, or the M2 section"))
-                TextField("Notes for the planner (optional)", text: $request)
-                Picker("Agents", selection: $agents) {
-                    ForEach(choices) { Text($0.label).tag($0.spec) }
-                }
-                if choices.count < AgentChoice.all.count {
-                    Text("Turned off: \((Config.load()?.disabledProviders ?? []).joined(separator: ", ")). Turn one back on with: node src/cli.js enable <provider>")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-            }
-            if drafting {
-                HStack { ProgressView().controlSize(.small); Text("Drafting… this usually takes a minute.") }
-            }
-            if let message = model.errorMessage, !drafting { Text(message).foregroundStyle(.red).font(.callout) }
-            HStack {
-                Spacer()
-                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
-                Button("Draft Plan") {
-                    Task { if await model.draft(document: document, steps: steps, request: request, agents: agents) != nil { dismiss() } }
-                }
-                .keyboardShortcut(.defaultAction)
-                .disabled(document.isEmpty || drafting)
-            }
-        }
-        .padding(20)
-        .frame(width: 560)
-    }
-
-    private func chooseDocument() {
-        let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.plainText, .init(filenameExtension: "md")!].compactMap { $0 }
-        panel.allowsMultipleSelection = false
-        if panel.runModal() == .OK, let url = panel.url { document = url.path }
     }
 }
 

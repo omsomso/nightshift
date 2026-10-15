@@ -7,6 +7,7 @@ import { Supervisor } from './supervisor.js';
 import { Workspace } from './workspace.js';
 import { validatePlan } from './plan.js';
 import { planDir, listPlanIds } from './home.js';
+import { collectRules } from './rules.js';
 
 const cliFile = fileURLToPath(new URL('./cli.js', import.meta.url));
 const git = (cwd, ...args) => execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
@@ -34,7 +35,9 @@ export function createPlan(definition, directory, { agents } = {}) {
     if (state.plan || state.tasks.length) throw new Error('This state directory already has work; use a new state directory for each plan.');
     const workspace = Workspace.create(definition, directory);
     const supervisor = new Supervisor(store, null, null);
-    supervisor.state.plan = { ...definition, ...(agents ? { agents } : {}), repo: workspace.repo, worktree: workspace.worktree,
+    // The rules as of the plan's base commit, fixed for the whole plan.
+    const rules = collectRules(workspace.repo, { root: workspace.worktree });
+    supervisor.state.plan = { ...definition, ...(agents ? { agents } : {}), rules, repo: workspace.repo, worktree: workspace.worktree,
       branch: workspace.branch, baseCommit: workspace.baseCommit, status: 'running', startedAt: new Date().toISOString() };
     supervisor.record(null, 'plan-started', `${definition.tasks.length} tasks on ${workspace.branch} from ${workspace.baseCommit.slice(0, 12)}`);
     definition.tasks.forEach((task, index) => supervisor.add({ ...task, maxAttempts: definition.limits.attemptsPerTask,
@@ -150,7 +153,7 @@ export function summarize(id) {
   const draft = readDraft(dir);
   const plan = state.plan;
   if (!plan) {
-    return draft ? { id, dir, status: 'draft', repo: draft.plan.repo, brief: draft.plan.brief, notes: draft.notes,
+    return draft ? { id, dir, status: 'draft', repo: draft.plan.repo, brief: draft.plan.brief, notes: draft.notes, rules: draft.rules ?? [],
       agents: draft.agents, source: draft.source, tasks: draft.plan.tasks.map(t => ({ ...t, status: 'draft' })), runner: false } : null;
   }
   const dispatches = state.events.filter(e => e.type === 'dispatched').length;
@@ -166,6 +169,7 @@ export function summarize(id) {
     brief: plan.brief, startedAt: plan.startedAt, finishedAt: plan.finishedAt ?? null,
     blocker: plan.reason ?? blocked?.reason ?? null, current: current ? { id: current.id, title: current.title, status: current.status } : null,
     finalReview: plan.final?.review?.reason ?? null,
+    rules: (plan.rules ?? []).map(r => [r.path, ...(r.also ?? [])].join(' = ')),
     tasks: state.tasks.map(t => ({ id: t.id, title: t.title, status: t.status, attempts: t.attempts, commit: t.commit ?? null, reason: t.reason ?? null })),
     limits: { dispatches: [dispatches, plan.limits.dispatches], tokens: [tokens, plan.limits.tokens], hours: [Number(hours.toFixed(2)), plan.limits.hours] },
     lastEvent: last ? { at: last.at, type: last.type } : null,

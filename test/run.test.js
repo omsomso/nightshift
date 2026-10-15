@@ -158,3 +158,35 @@ test('a turned-off provider is never started, and defaults follow the switch', t
   assert.match(e.cli('enable', 'codex'), /codex is now on\. New plans default to: claude:codex\./);
   assert.equal(JSON.parse(e.cli('draft', 'docs/PLAN.md', '--json')).draft.agents, 'claude:codex');
 });
+
+test('setup installs the nightshift command and skill, and never overwrites foreign files', t => {
+  const e = setupEnv(t);
+  const root = join(e.root, 'install-root');
+  mkdirSync(join(root, '.claude'), { recursive: true });
+  mkdirSync(join(root, '.local', 'bin'), { recursive: true });
+  e.env.NIGHTSHIFT_INSTALL_ROOT = root;
+  const out = e.cli('setup');
+  assert.match(out, /installed: .*\.local\/bin\/nightshift/);
+  assert.match(out, /installed: .*\.claude\/skills\/nightshift\/SKILL\.md/);
+  assert.doesNotMatch(out, /\.codex\/skills/, 'no Codex folder, no Codex skill');
+  const skill = readFileSync(join(root, '.claude', 'skills', 'nightshift', 'SKILL.md'), 'utf8');
+  assert.match(skill, /^---\nname: nightshift\n/);
+  const listed = execFileSync(join(root, '.local', 'bin', 'nightshift'), ['list'], { env: e.env, encoding: 'utf8' });
+  assert.match(listed, /No plans yet/);
+  assert.match(e.cli('setup'), /unchanged: .*nightshift/);
+  writeFileSync(join(root, '.local', 'bin', 'nightshift'), '#!/bin/sh\necho mine\n');
+  assert.match(e.cli('setup'), /skipped \(a file Nightshift did not write is already there\): .*\.local\/bin\/nightshift/);
+});
+
+test('plan chat keeps one conversation and extracts the plan document', t => {
+  const e = setupEnv(t);
+  e.cli('setup');
+  const first = JSON.parse(e.cli('chat', '--repo', e.repo, '--message', 'Help me plan two notes.'));
+  assert.match(first.session, /^[0-9a-f-]{36}$/);
+  assert.equal(first.document, '# Plan\n\n1. Write note one.\n');
+  const second = JSON.parse(e.cli('chat', '--repo', e.repo, '--session', first.session, '--message', 'Add a second note.'));
+  assert.equal(second.session, first.session, 'the same conversation is resumed');
+  assert.match(second.document, /2\. Write note two\./);
+  const status = JSON.parse(e.cli('providers', '--json'));
+  assert.deepEqual(status.providers.map(p => [p.name, p.enabled, p.signedIn]), [['codex', true, true], ['claude', true, true]]);
+});

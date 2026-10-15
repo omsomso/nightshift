@@ -14,6 +14,8 @@ export function subscriptionEnv(env = process.env) {
 // Read-only surface for this milestone: only file-reading tools exist, nothing can prompt,
 // MCP servers and settings-file hooks are not loaded, and file tools stay inside cwd.
 export const readOnlyTools = ['Read', 'Grep', 'Glob'];
+// The git subcommands edit-mode workers may never run (also listed in editSettings below).
+export const gitHistoryCommand = /^\s*git\s+(?:-C\s+\S+\s+)?(push|commit|remote|reset|rebase|merge|tag|worktree|config)\b/;
 
 // Edit mode (docs/EDIT_MODE.md): file tools stay inside the worktree (--restricted), and
 // shell commands run in the OS sandbox with writes limited to the worktree and temp, no
@@ -34,7 +36,7 @@ export function claudeArgs({ sessionId, resume, outputSchema, model, maxBudgetUs
   const tools = edit ? editTools : readOnlyTools;
   return ['-p', '--output-format', 'stream-json', '--verbose',
     resume ? '--resume' : '--session-id', sessionId,
-    '--json-schema', JSON.stringify(outputSchema),
+    ...(outputSchema ? ['--json-schema', JSON.stringify(outputSchema)] : []),
     '--tools', tools.join(','), '--allowedTools', tools.join(','),
     '--permission-mode', 'dontAsk', '--permission-prompts', 'none',
     '--restricted', '--strict-mcp-config',
@@ -64,7 +66,7 @@ export class ClaudeSession {
       { cwd: this.cwd, env: subscriptionEnv(), stdio: ['pipe', 'pipe', 'pipe'], shell: false });
     const closed = new Promise(resolve => child.once('close', resolve));
     const lines = new JsonlDecoder({ label: 'Claude stream', maxLineBytes: this.maxLineBytes });
-    const turn = { sessionId, emit, turnId: null, finished: false };
+    const turn = { sessionId, emit, turnId: null, finished: false, structured: Boolean(outputSchema) };
     let timer;
     let onAbort;
     try {
@@ -89,7 +91,7 @@ export class ClaudeSession {
           try {
             for (const message of lines.push(chunk)) {
               const result = this.consume(turn, message);
-              if (result) return finish(null, result);
+              if (result) return finish(null, result.value);
             }
           } catch (error) { finish(error); }
         });
@@ -143,21 +145,30 @@ export class ClaudeSession {
     emit({ type: 'usage', threadId: sessionId, turnId: turn.turnId, costUsd: message.total_cost_usd,
       numTurns: message.num_turns, durationMs: message.duration_ms, tokens, usage: message.usage });
     emit({ type: 'turn-completed', threadId: sessionId, turnId: turn.turnId, status, terminalReason: message.terminal_reason });
+    // Git history commands are Nightshift's job and denied by policy. Project rules (for
+    // example "commit and push after every change") may lead an agent to try them; that is
+    // recorded but does not block the task. Any other denied request still blocks it.
     const denials = message.permission_denials ?? [];
+    const expected = denial => denial.tool_name === 'Bash' && gitHistoryCommand.test(String(denial.tool_input?.command ?? ''));
     for (const denial of denials) {
-      emit({ type: 'approval-required', threadId: sessionId, turnId: turn.turnId, tool: denial.tool_name,
-        toolUseId: denial.tool_use_id, reason: 'Denied automatically: this adapter never approves tool requests.' });
+      emit(expected(denial)
+        ? { type: 'policy-denied', threadId: sessionId, turnId: turn.turnId, tool: denial.tool_name, toolUseId: denial.tool_use_id,
+            command: String(denial.tool_input.command).slice(0, 200), reason: 'Git history is Nightshift\'s job; left for the owner.' }
+        : { type: 'approval-required', threadId: sessionId, turnId: turn.turnId, tool: denial.tool_name,
+            toolUseId: denial.tool_use_id, reason: 'Denied automatically: this adapter never approves tool requests.' });
     }
-    if (denials.length) {
-      throw new BlockedError(`Provider request requires human handling: denied ${denials.map(d => d.tool_name).join(', ')}`);
+    const blocking = denials.filter(denial => !expected(denial));
+    if (blocking.length) {
+      throw new BlockedError(`Provider request requires human handling: denied ${blocking.map(d => d.tool_name).join(', ')}`);
     }
     if (status !== 'completed') throw new Error(`Claude turn ${status}: ${message.errors?.join('; ') || message.result || 'no result'}`);
+    if (!turn.structured) return { value: String(message.result ?? '') };
     let result = message.structured_output;
     if (result === undefined) {
       try { result = JSON.parse(message.result); }
       catch { throw new Error('Final output is not JSON.'); }
     }
     if (!result || typeof result !== 'object' || Array.isArray(result)) throw new Error('Final output is not a JSON object.');
-    return result;
+    return { value: result };
   }
 }

@@ -76,6 +76,7 @@ function planSection(state) {
     `Branch \`${plan.branch}\` from \`${plan.baseCommit.slice(0, 12)}\` in \`${plan.repo}\`; worktree \`${plan.worktree}\`.`,
     `Limits used: ${dispatches}/${plan.limits.dispatches} dispatches, ${tokens.toLocaleString('en-US')}/${plan.limits.tokens.toLocaleString('en-US')} tokens, ` +
       `${hours.toFixed(1)}/${plan.limits.hours} hours.`];
+  out.push(`Project rules: ${plan.rules?.length ? plan.rules.map(r => [r.path, ...(r.also ?? [])].join(' = ')).join(', ') : 'none found'}.`);
   if (plan.reason) out.push('', `Blocker: ${line(plan.reason)}. After fixing it, run \`node src/cli.js retry ${plan.id}\` and \`resume\`.`);
   const checks = task => {
     const last = state.events.findLast(e => e.taskId === task.id && e.type === 'checks');
