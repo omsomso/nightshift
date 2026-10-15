@@ -37,11 +37,22 @@ yes, it runs in the background in its own worktree until the plan is done or nee
 you. `list` shows all plans; `merge <id>` is the final approval. Plans live in
 `~/.nightshift/plans/<id>`.
 
+A plan does not start from whatever happens to be checked out. By default Nightshift
+fetches `origin` and starts from the project's main branch as it is there (for example
+`origin/main`), so work merged from other sessions is included; without a remote it uses
+the local main branch. The planner reads a snapshot of exactly that commit
+(`~/.nightshift/snapshots/`), and `merge` merges into that same branch (`main`) wherever it
+is checked out, or in a temporary worktree if it is not. Nothing is ever pushed.
+`--base` picks another branch, tag, or commit; `branches --repo <path>` lists candidates.
+Set `"defaultBase": "local"` (local main branch) or `"head"` (the checkout, the old
+behavior) in `~/.nightshift/config.json` to change the default.
+
 Commands for plans (`node src/cli.js --help` lists them all):
 
 ```sh
-node src/cli.js run docs/PLAN.md --base v1.2           # start the worktree from a tag, branch, or commit, not HEAD
-node src/cli.js draft docs/PLAN.md --base main~3       # only draft; `--base` is recorded in the plan
+node src/cli.js run docs/PLAN.md --base v1.2           # start from a tag, branch, or commit instead of origin's main branch
+node src/cli.js draft docs/PLAN.md --base main~3       # only draft; the exact commit and the ref are recorded in the plan
+node src/cli.js branches --repo ../VSTS                # where a plan would start, and recent branches to choose from
 node src/cli.js start <id>                             # start (or `stop <id>`) a plan's background runner
 node src/cli.js list                                   # all plans; `now:` names the task running or in review
 node src/cli.js logs <id> --lines 100                  # tail of the runner's serve.log (default 40 lines)
@@ -49,7 +60,7 @@ node src/cli.js report --plan <id>                     # Markdown report: each t
 node src/cli.js report --plan <id> --json              # one plan's summary, as one entry of `list --json`
 node src/cli.js limit tokens 8000000 --plan <id>       # change a limit; unknown names are refused at once
 node src/cli.js discard <id> --yes                     # remove an unmerged plan: its worktree, branch, and directory
-node src/cli.js merge <id>                             # approve: merge the plan's branch
+node src/cli.js merge <id>                             # approve: merge the plan's branch into the branch it started from
 ```
 
 `discard` without `--yes` only lists what it would remove. It refuses while the
@@ -154,7 +165,8 @@ for you to merge. See `docs/EDIT_MODE.md`.
 - `test/supervisor.test.js`: behavioral checks for unattended execution.
 - `test/service.test.js`: store, lease, command, serve-loop, and report tests.
 - `test/edit.test.js`: edit-mode cycle, gates, limits, final review, and serve end to end.
-- `test/run.test.js`: setup pins, draft → background run → merge, `--base`, and runner stop.
+- `src/base.js`: where a plan starts (fetched default branch, `--base`), branch listing, and planning snapshots.
+- `test/run.test.js`: setup pins, draft → background run → merge, `--base`, starting from a remote that is ahead, and runner stop.
 - `test/cli.test.js`: `logs`, `discard`, limit names, `list` now line, report task detail, and `report --json`.
 - `test/codex.test.js`, `test/claude.test.js`: subprocess protocol and persisted session tests.
 

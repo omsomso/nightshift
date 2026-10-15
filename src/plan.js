@@ -60,7 +60,8 @@ export function validatePlan(plan, baseDir, label = 'plan') {
     if (!(Number(value) > 0) && !(key === 'fixupRounds' && Number(value) === 0)) fail(`limit ${key} must be a positive number.`);
   }
   return {
-    id: plan.id, repo: resolve(baseDir, plan.repo), base: plan.base ?? 'HEAD', brief: plan.brief.trim(),
+    id: plan.id, repo: resolve(baseDir, plan.repo), brief: plan.brief.trim(),
+    ...(plan.base ? { base: plan.base } : {}), ...(plan.baseRef ? { baseRef: plan.baseRef } : {}), ...(plan.baseBranch ? { baseBranch: plan.baseBranch } : {}),
     checks: plan.checks, allowedPaths, limits,
     ...(plan.effort ? { effort: (() => { try { return validateEffort(plan.effort); } catch (error) { return fail(error.message); } })() } : {}),
     tasks: plan.tasks.map(task => ({ id: task.id, title: task.title.trim(), acceptance: task.acceptance.trim(),

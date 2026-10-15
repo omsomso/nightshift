@@ -8,6 +8,7 @@ import { Workspace } from './workspace.js';
 import { validatePlan } from './plan.js';
 import { planDir, listPlanIds } from './home.js';
 import { collectRules } from './rules.js';
+import { resolveBase } from './base.js';
 import { validateEffort } from './effort.js';
 import { readConfig } from './home.js';
 
@@ -30,6 +31,8 @@ export function readDraft(dir) {
 
 // Creates the plan's worktree and queues its tasks in order. The state directory must be new.
 export function createPlan(definition, directory, { agents } = {}) {
+  const resolved = resolveBase(definition.repo, { base: definition.base, fetch: !definition.base || definition.base.startsWith('origin/') });
+  definition = { ...definition, base: resolved.commit, baseRef: definition.baseRef ?? resolved.ref, baseBranch: definition.baseBranch ?? resolved.branch };
   const store = new Store(directory);
   store.acquire();
   try {
@@ -104,15 +107,31 @@ export async function mergePlan(id) {
   if (before.status !== 'awaiting-approval') throw new Error(`Plan ${id} is ${before.status}; only a plan awaiting approval can be merged.`);
   await stopRunner(id);
   const { repo, branch, worktree } = before;
-  const target = git(repo, 'rev-parse', '--abbrev-ref', 'HEAD');
+  // Merge into the branch the plan started from (for example main), wherever it is checked
+  // out; if it is not checked out anywhere, use a temporary worktree. Older plans without a
+  // recorded base branch merge into the repository's current branch.
+  const target = before.baseBranch ?? git(repo, 'rev-parse', '--abbrev-ref', 'HEAD');
   if (target === 'HEAD') throw new Error(`${repo} has a detached HEAD; check out the branch to merge into first.`);
-  if (git(repo, 'status', '--porcelain')) throw new Error(`${repo} has uncommitted changes; commit or stash them before merging.`);
-  try { git(repo, 'merge', '--no-ff', '-m', `Merge Nightshift plan ${id}`, branch); }
-  catch (error) {
-    try { git(repo, 'merge', '--abort'); } catch {}
-    throw new Error(`Merging ${branch} into ${target} conflicted; nothing was changed. Merge it by hand. (${error.stderr?.trim() ?? error.message})`);
+  const exists = ref => { try { git(repo, 'rev-parse', '--verify', '--quiet', ref); return true; } catch { return false; } };
+  if (!exists(`refs/heads/${target}`)) git(repo, 'branch', target, before.baseRef ?? before.baseCommit);
+  const checkedOut = git(repo, 'worktree', 'list', '--porcelain').split('\n\n')
+    .map(block => ({ path: /^worktree (.+)$/m.exec(block)?.[1], branch: /^branch refs\/heads\/(.+)$/m.exec(block)?.[1] }))
+    .find(entry => entry.branch === target);
+  const temporary = checkedOut ? null : join(planDir(id), 'merge');
+  const where = checkedOut?.path ?? temporary;
+  if (temporary) { rmSync(temporary, { recursive: true, force: true }); git(repo, 'worktree', 'add', '-q', temporary, target); }
+  let merged;
+  try {
+    if (git(where, 'status', '--porcelain', '--ignore-submodules=dirty')) throw new Error(`${where} (where ${target} is checked out) has uncommitted changes; commit or stash them before merging.`);
+    try { git(where, 'merge', '--no-ff', '-m', `Merge Nightshift plan ${id}`, branch); }
+    catch (error) {
+      try { git(where, 'merge', '--abort'); } catch {}
+      throw new Error(`Merging ${branch} into ${target} conflicted; nothing was changed. Merge it by hand. (${error.stderr?.trim() ?? error.message})`);
+    }
+    merged = git(where, 'rev-parse', 'HEAD');
+  } finally {
+    if (temporary) { try { git(repo, 'worktree', 'remove', '--force', temporary); } catch {} }
   }
-  const merged = git(repo, 'rev-parse', 'HEAD');
   try { git(repo, 'worktree', 'remove', worktree); } catch {}
   const store = new Store(dir);
   store.acquire();
@@ -121,7 +140,7 @@ export async function mergePlan(id) {
     supervisor.state.plan.status = 'merged';
     supervisor.state.plan.mergedAt = new Date().toISOString();
     supervisor.state.plan.mergeCommit = merged;
-    supervisor.record(null, 'plan-merged', `Merged ${branch} into ${target} as ${merged.slice(0, 12)}; branch kept.`);
+    supervisor.record(null, 'plan-merged', `Merged ${branch} into ${target} as ${merged.slice(0, 12)}; branch kept; nothing pushed.`);
     store.save(supervisor.state);
   } finally { store.release(); }
   return { target, merged, branch };
@@ -157,6 +176,8 @@ export function summarize(id) {
   const plan = state.plan;
   if (!plan) {
     return draft ? { id, dir, status: 'draft', repo: draft.plan.repo, brief: draft.plan.brief, notes: draft.notes, rules: draft.rules ?? [],
+      baseRef: draft.plan.baseRef ?? null, baseCommit: draft.plan.base ?? null, baseBranch: draft.plan.baseBranch ?? null,
+      baseSubject: draft.baseInfo?.subject ?? null, baseDate: draft.baseInfo?.date ?? null,
       agents: draft.agents, source: draft.source, tasks: draft.plan.tasks.map(t => ({ ...t, status: 'draft' })), runner: false } : null;
   }
   const dispatches = state.events.filter(e => e.type === 'dispatched').length;
@@ -169,6 +190,7 @@ export function summarize(id) {
   return {
     id, dir, status: plan.status, paused: state.paused, runner: Boolean(state.runner?.alive),
     repo: plan.repo, branch: plan.branch, worktree: plan.worktree, agents: plan.agents ?? state.project?.pairing ?? null,
+    baseRef: plan.baseRef ?? null, baseCommit: plan.baseCommit ?? null, baseBranch: plan.baseBranch ?? null,
     brief: plan.brief, startedAt: plan.startedAt, finishedAt: plan.finishedAt ?? null,
     blocker: plan.reason ?? blocked?.reason ?? null, current: current ? { id: current.id, title: current.title, status: current.status } : null,
     finalReview: plan.final?.review?.reason ?? null,

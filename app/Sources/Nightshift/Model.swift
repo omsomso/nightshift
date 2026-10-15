@@ -24,6 +24,10 @@ struct Plan: Decodable, Identifiable, Hashable {
     let current: CurrentTask?
     let finalReview: String?
     let rules: [String]?
+    let baseRef: String?
+    let baseCommit: String?
+    let baseBranch: String?
+    let baseSubject: String?
     let tasks: [PlanTask]
     let limits: Limits?
     let lastEvent: LastEvent?
@@ -131,6 +135,14 @@ enum CLIError: LocalizedError {
     }
 }
 
+// Lets the caller stop a running command (SIGTERM; the CLI then stops its agent turn).
+final class ProcessBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var process: Process?
+    func set(_ p: Process?) { lock.lock(); process = p; lock.unlock() }
+    func terminate() { lock.lock(); process?.terminate(); lock.unlock() }
+}
+
 struct CLI {
     let node: String
     let cli: String
@@ -151,7 +163,7 @@ struct CLI {
     }
 
     // Runs one CLI command off the main thread and returns its standard output.
-    func run(_ arguments: [String]) async throws -> String {
+    func run(_ arguments: [String], box: ProcessBox? = nil) async throws -> String {
         let node = self.node, cli = self.cli
         return try await Task.detached(priority: .userInitiated) {
             let process = Process()
@@ -162,6 +174,8 @@ struct CLI {
             process.standardOutput = out
             process.standardError = err
             try process.run()
+            box?.set(process)
+            defer { box?.set(nil) }
             let output = out.fileHandleForReading.readDataToEndOfFile()
             let errors = err.fileHandleForReading.readDataToEndOfFile()
             process.waitUntilExit()
@@ -233,6 +247,25 @@ final class AppModel {
     func output(_ arguments: [String]) async -> String {
         do { return try await CLI.load().run(arguments) }
         catch { return error.localizedDescription }
+    }
+
+    // Runs a prepared draft command (from Plan Studio); returns the new plan id.
+    func draftWith(_ arguments: [String]) async -> String? {
+        busy.insert("new-plan")
+        defer { busy.remove("new-plan") }
+        do {
+            let output = try await CLI.load().run(arguments)
+            struct Drafted: Decodable { let id: String }
+            let line = output.split(separator: "\n").last.map(String.init) ?? output
+            let drafted = try JSONDecoder().decode(Drafted.self, from: Data(line.utf8))
+            errorMessage = nil
+            await refresh()
+            selection = drafted.id
+            return drafted.id
+        } catch {
+            errorMessage = error.localizedDescription
+            return nil
+        }
     }
 
     // Drafts a plan from a document; returns the new plan id.
@@ -329,4 +362,19 @@ extension AppModel {
         guard let output = try? await CLI.load().run(["effort", "--json"]) else { return nil }
         return try? JSONDecoder().decode(EffortSettings.self, from: Data(output.utf8))
     }
+}
+
+// `node src/cli.js branches --json`
+struct BaseInfo: Decodable, Hashable {
+    let ref: String
+    let commit: String
+    let subject: String?
+    let date: String?
+    var short: String { String(commit.prefix(7)) }
+}
+
+struct BranchList: Decodable {
+    let repo: String
+    let `default`: BaseInfo
+    let branches: [BaseInfo]
 }

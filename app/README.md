@@ -35,7 +35,8 @@ mismatch). Copy the app to /Applications if you want it in Launchpad. The icon i
 
 Development aids: `NIGHTSHIFT_SNAPSHOT=<dir>` renders each plan's view to PNG and quits
 (native controls appear as placeholders); `NIGHTSHIFT_OPEN_STUDIO=1` opens Plan Studio at
-launch, and `NIGHTSHIFT_STUDIO_DEMO=1` fills it with a sample conversation.
+launch, and `NIGHTSHIFT_STUDIO_DEMO=1` fills it with a sample conversation (`=busy` shows
+the typing state).
 
 ## Verified
 
@@ -46,4 +47,9 @@ the CLI commands behind them (`chat`, `providers`, `login`, `enable`/`disable`,
 project rules correctly. The owner checked Plan Studio and Accounts on screen. 2026-10-15 (later): the notes-first
 Plan Studio was screenshotted in both phases (intake, and a sample interview with question
 chips and the roadmap pane); a live interview turn picked the right project from the
-workspace and returned four structured questions.
+workspace and returned four structured questions. 2026-10-15 (evening): Plan Studio
+shows questions one at a time as option rows (explanation, Recommended badge, number keys,
+Back/Next), animates messages, shows a typing indicator, has a Stop button (⌘.) that ends
+Claude's turn, and a "Starts from" branch picker. The demo and busy states were
+screenshotted (`NIGHTSHIFT_STUDIO_DEMO=1` or `=busy`); Stop and the picker against a live
+turn were not clicked through on screen.

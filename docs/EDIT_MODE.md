@@ -43,6 +43,19 @@ review judges only the plan's brief and tasks within its allowed paths; other
 observations are suggestions, not failures. The morning report shows the
 branch, diff summary, checks, and usage. Only the owner merges.
 
+## Where a plan starts
+
+The base is resolved when the plan is created (`src/base.js`), never taken from the
+owner's current checkout: `origin` is fetched and the default is the remote's main branch
+(`origin/main`, or whatever `origin/HEAD` names), falling back to the local main branch
+without a remote. `--base` overrides it. The plan records the exact commit (`base`), the
+ref as typed (`baseRef`), and the branch it belongs to (`baseBranch`). Planning reads a
+detached snapshot of that commit in `~/.nightshift/snapshots/<repo>-<hash>`, so the planner
+and the interview see the code the worktree will contain. `merge` merges into `baseBranch`:
+in the worktree where it is checked out (which must be clean), else in a temporary
+worktree; a missing local branch is created from the ref. Conflicts abort cleanly and
+nothing is pushed.
+
 ## Project rules
 
 Nightshift's sandboxed agents do not load project instructions on their own (Claude's

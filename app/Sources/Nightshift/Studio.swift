@@ -2,21 +2,27 @@ import SwiftUI
 import AppKit
 
 struct ChatMessage: Identifiable, Hashable {
-    enum Role { case owner, assistant }
+    enum Role { case owner, assistant, note }
     let id = UUID()
     let role: Role
     let text: String
 }
 
-// One multiple-choice question from the interviewer, plus the owner's answer.
+struct InterviewOption: Decodable, Hashable {
+    let label: String
+    let detail: String?
+    let recommended: Bool?
+}
+
+// One multiple-choice question from the interviewer.
 struct InterviewQuestion: Decodable, Identifiable, Hashable {
     let question: String
-    let options: [String]
+    let options: [InterviewOption]
     let multiple: Bool
     var id: String { question }
 }
 
-// `node src/cli.js chat` reply.
+// `nightshift chat` reply.
 struct InterviewReply: Decodable {
     let session: String?
     let cwd: String?
@@ -24,6 +30,7 @@ struct InterviewReply: Decodable {
     let repo: String?
     let questions: [InterviewQuestion]?
     let document: String?
+    let base: BaseInfo?
 }
 
 // Who does the work and who reviews it. Codex is listed even when turned off.
@@ -90,8 +97,14 @@ final class StudioModel {
     var rulesSent = false
     // Same default as the CLI: Claude works and Codex reviews, unless Codex is turned off.
     var roles = AgentRoles(spec: AgentRoles.disabled().contains("codex") ? "claude" : "claude:codex")
+    // Where the plan starts. nil means the project's default: its main branch as on the remote.
+    var baseRef: String?
+    var defaultBase: BaseInfo?
+    var branches: [BaseInfo] = []
+    var loadingBranches = false
     var messages: [ChatMessage] = []
     var questions: [InterviewQuestion] = []
+    var questionIndex = 0
     var answers: [String: Set<String>] = [:]
     var otherAnswers: [String: String] = [:]
     var session: String?
@@ -101,8 +114,15 @@ final class StudioModel {
     var pathEdited = false
     var busy: String?
     var error: String?
+    private let process = ProcessBox()
+    private var stopped = false
 
     var repoName: String { repo.map { URL(fileURLWithPath: $0).lastPathComponent } ?? "Nightshift picks it" }
+    var baseLabel: String {
+        if let baseRef { return baseRef }
+        if let defaultBase { return "\(defaultBase.ref) (latest)" }
+        return loadingBranches ? "Checking branches…" : "Main branch (latest)"
+    }
 
     func chooseRepository() {
         let panel = NSOpenPanel()
@@ -110,21 +130,36 @@ final class StudioModel {
         panel.canChooseFiles = false
         panel.prompt = "Choose"
         panel.message = "Choose the Git repository these notes are about."
-        if panel.runModal() == .OK, let url = panel.url {
-            repo = url.path
-            pickedByAgent = false
-            rulesSent = false
-        }
+        if panel.runModal() == .OK, let url = panel.url { setRepository(url.path, byAgent: false) }
+    }
+
+    func setRepository(_ path: String?, byAgent: Bool) {
+        let changed = path != repo
+        repo = path
+        pickedByAgent = byAgent && path != nil
+        guard changed else { return }
+        rulesSent = false; baseRef = nil; defaultBase = nil; branches = []
+        if path != nil { Task { await loadBranches() } }
+    }
+
+    func loadBranches() async {
+        guard let repo else { return }
+        loadingBranches = true
+        defer { loadingBranches = false }
+        guard let output = try? await CLI.load().run(["branches", "--repo", repo, "--json"]),
+              let list = try? JSONDecoder().decode(BranchList.self, from: Data(output.utf8)), self.repo == repo else { return }
+        defaultBase = list.default
+        branches = list.branches
     }
 
     func startInterview() async {
         let text = notes.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
-        phase = .conversation
-        messages = [ChatMessage(role: .owner, text: text)]
+        withAnimation(.easeInOut(duration: 0.25)) { phase = .conversation }
+        append(ChatMessage(role: .owner, text: text))
         var arguments = ["chat", "--notes", "--message", text]
         if let repo { arguments += ["--repo", repo]; rulesSent = true }
-        await turn(arguments, busy: "Claude is reading your notes and the projects…")
+        await turn(arguments, busy: "Reading your notes and the projects")
     }
 
     func sendAnswers() async {
@@ -142,66 +177,63 @@ final class StudioModel {
     }
 
     func send(_ text: String) async {
-        guard let session else { return }
-        messages.append(ChatMessage(role: .owner, text: text))
-        questions = []
+        guard let session, !text.isEmpty else { return }
+        append(ChatMessage(role: .owner, text: text))
+        withAnimation { questions = []; questionIndex = 0 }
         answers = [:]
         otherAnswers = [:]
         var arguments = ["chat", "--session", session, "--message", text]
         if let cwd { arguments += ["--cwd", cwd] }
-        if let repo, !rulesSent { arguments += ["--repo", repo, "--with-rules"]; rulesSent = true }
-        await turn(arguments, busy: "Claude is thinking…")
+        // The project goes along on every turn so Claude keeps reading the plan's starting point.
+        if let repo {
+            arguments += ["--repo", repo]
+            if !rulesSent { arguments.append("--with-rules"); rulesSent = true }
+        }
+        await turn(arguments, busy: "Thinking")
+    }
+
+    // Stops Claude's current turn. The conversation can continue afterwards.
+    func stop() {
+        stopped = true
+        process.terminate()
+    }
+
+    private func append(_ message: ChatMessage) {
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) { messages.append(message) }
     }
 
     private func turn(_ arguments: [String], busy label: String) async {
-        busy = label
-        defer { busy = nil }
+        withAnimation { busy = label }
+        stopped = false
+        defer { withAnimation { busy = nil } }
         do {
-            let output = try await CLI.load().run(arguments)
+            let output = try await CLI.load().run(arguments, box: process)
             let reply = try JSONDecoder().decode(InterviewReply.self, from: Data(output.utf8))
             session = reply.session ?? session
             cwd = reply.cwd ?? cwd
-            if let picked = reply.repo, repo == nil || pickedByAgent {
-                if picked != repo { rulesSent = false }
-                repo = picked
-                pickedByAgent = true
+            if let picked = reply.repo, repo == nil || pickedByAgent { setRepository(picked, byAgent: true) }
+            if let base = reply.base, defaultBase == nil { defaultBase = base }
+            if !reply.reply.isEmpty { append(ChatMessage(role: .assistant, text: reply.reply)) }
+            withAnimation(.easeOut(duration: 0.25)) {
+                questions = reply.questions ?? []
+                questionIndex = 0
             }
-            if !reply.reply.isEmpty { messages.append(ChatMessage(role: .assistant, text: reply.reply)) }
-            questions = reply.questions ?? []
             if let document = reply.document {
-                self.document = document
+                withAnimation { self.document = document }
                 if !pathEdited { documentPath = "docs/plans/\(Self.slug(for: document)).md" }
             }
             error = nil
         } catch {
-            self.error = error.localizedDescription
+            if stopped { append(ChatMessage(role: .note, text: "Stopped. Reply to continue.")) }
+            else { self.error = error.localizedDescription }
         }
     }
 
-    // Development aid (NIGHTSHIFT_STUDIO_DEMO=1): a sample conversation for checking the layout.
-    func loadDemo() {
-        phase = .conversation
-        repo = NSString(string: "~/CodexProjects/VSTS").expandingTildeInPath
-        pickedByAgent = true
-        session = "demo"
-        messages = [
-            ChatMessage(role: .owner, text: "reverb tail clicks when bypassing\npreset browser should remember last folder\nCPU spikes when resizing the UI"),
-            ChatMessage(role: .assistant, text: "These notes are about **VSTS**. I read the bypass path in the reverb processor and the preset browser. A few questions before I write the roadmap:")
-        ]
-        questions = [
-            InterviewQuestion(question: "How should bypass handle the reverb tail?", options: ["Let the tail ring out", "Short crossfade (about 20 ms)", "Cut immediately but without a click"], multiple: false),
-            InterviewQuestion(question: "Which preset folders should be remembered?", options: ["Last folder only", "Last folder per plugin", "Recent folders list"], multiple: false),
-            InterviewQuestion(question: "Which UI sizes matter for the CPU fix?", options: ["Default", "Large", "Full screen"], multiple: true)
-        ]
-        answers = ["How should bypass handle the reverb tail?": ["Short crossfade (about 20 ms)"]]
-        document = "# VSTS fixes: bypass, presets, resizing\n\nCovers three owner notes; leaves preset tagging for later.\n\n1. Crossfade the reverb on bypass...\n2. Remember the preset browser folder...\n3. Throttle repaints while resizing...\n"
-        documentPath = "docs/plans/vsts-fixes-bypass-presets-resizing.md"
-    }
-
     func startOver() {
-        phase = .intake
+        stop()
+        withAnimation { phase = .intake }
         messages = []; questions = []; session = nil; cwd = nil; document = ""; error = nil
-        if pickedByAgent { repo = nil; pickedByAgent = false }
+        if pickedByAgent { setRepository(nil, byAgent: false) }
         rulesSent = false; pathEdited = false
     }
 
@@ -213,12 +245,11 @@ final class StudioModel {
         do {
             document = try String(contentsOf: url, encoding: .utf8)
             if let root = Self.gitRoot(of: url.deletingLastPathComponent()) {
-                repo = root
-                pickedByAgent = false
+                setRepository(root, byAgent: false)
                 documentPath = String(url.path.dropFirst(root.count + 1))
                 pathEdited = true
             }
-            phase = .conversation
+            withAnimation { phase = .conversation }
             error = nil
         } catch {
             self.error = error.localizedDescription
@@ -254,6 +285,37 @@ final class StudioModel {
         }
         return nil
     }
+
+    // Development aid (NIGHTSHIFT_STUDIO_DEMO=1, or =busy for the typing state): a sample
+    // conversation for checking the layout.
+    func loadDemo() {
+        phase = .conversation
+        repo = NSString(string: "~/CodexProjects/VSTS").expandingTildeInPath
+        pickedByAgent = true
+        session = "demo"
+        defaultBase = BaseInfo(ref: "origin/main", commit: "35cfda769a29", subject: "Merge pull request #33", date: nil)
+        messages = [
+            ChatMessage(role: .owner, text: "reverb tail clicks when bypassing\npreset browser should remember last folder\nCPU spikes when resizing the UI"),
+            ChatMessage(role: .assistant, text: "These notes are about **VSTS**. I read the bypass path in the reverb processor and the preset browser. A few questions before I write the roadmap:")
+        ]
+        questions = [
+            InterviewQuestion(question: "How should bypass handle the reverb tail?", options: [
+                InterviewOption(label: "Let the tail ring out", detail: "Most natural; bypass takes effect once the tail fades.", recommended: nil),
+                InterviewOption(label: "Short crossfade", detail: "About 20 ms; no click and no lingering tail.", recommended: true),
+                InterviewOption(label: "Cut immediately", detail: "Instant, with a tiny ramp to avoid the click.", recommended: nil)], multiple: false),
+            InterviewQuestion(question: "Which preset folders should be remembered?", options: [
+                InterviewOption(label: "Last folder only", detail: nil, recommended: nil),
+                InterviewOption(label: "Last folder per plugin", detail: "Each plugin opens where you left it.", recommended: true)], multiple: false),
+            InterviewQuestion(question: "Which UI sizes matter for the CPU fix?", options: [
+                InterviewOption(label: "Default", detail: nil, recommended: nil),
+                InterviewOption(label: "Large", detail: nil, recommended: nil),
+                InterviewOption(label: "Full screen", detail: nil, recommended: nil)], multiple: true)
+        ]
+        answers = ["How should bypass handle the reverb tail?": ["Short crossfade"]]
+        document = "# VSTS fixes: bypass, presets, resizing\n\nCovers three owner notes; leaves preset tagging for later.\n\n1. Crossfade the reverb on bypass...\n2. Remember the preset browser folder...\n3. Throttle repaints while resizing...\n"
+        documentPath = "docs/plans/vsts-fixes-bypass-presets-resizing.md"
+        if ProcessInfo.processInfo.environment["NIGHTSHIFT_STUDIO_DEMO"] == "busy" { busy = "Thinking"; questions = [] }
+    }
 }
 
 struct StudioView: View {
@@ -265,8 +327,8 @@ struct StudioView: View {
     var body: some View {
         Group {
             switch studio.phase {
-            case .intake: intake
-            case .conversation: conversation
+            case .intake: intake.transition(.opacity)
+            case .conversation: conversation.transition(.opacity)
             }
         }
         .frame(minWidth: 920, minHeight: 620)
@@ -277,6 +339,24 @@ struct StudioView: View {
         } message: {
             Text("\(studio.documentPath) already exists in the project with different content.")
         }
+    }
+
+    private var basePicker: some View {
+        Menu {
+            Button(studio.defaultBase.map { "Latest \($0.ref) · \($0.short)" } ?? "Latest main branch") { studio.baseRef = nil }
+            if !studio.branches.isEmpty {
+                Divider()
+                ForEach(studio.branches, id: \.ref) { branch in
+                    Button("\(branch.ref) · \(branch.subject ?? branch.short)") { studio.baseRef = branch.ref }
+                }
+            }
+        } label: {
+            Label(studio.baseLabel, systemImage: "arrow.triangle.branch")
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .disabled(studio.repo == nil)
+        .help("Where the plan starts. By default the project's main branch as it is on its remote (fetched first), so work merged from other sessions is included. Your current checkout does not matter.")
     }
 
     // MARK: Intake
@@ -309,7 +389,15 @@ struct StudioView: View {
                         HStack(spacing: 8) {
                             Text(studio.repoName).fontWeight(studio.repo == nil ? .regular : .semibold)
                             Button(studio.repo == nil ? "Choose…" : "Change…") { studio.chooseRepository() }
-                            if studio.repo != nil { Button("Let Nightshift pick") { studio.repo = nil } .buttonStyle(.link) }
+                            if studio.repo != nil { Button("Let Nightshift pick") { studio.setRepository(nil, byAgent: false) }.buttonStyle(.link) }
+                        }
+                    }
+                    GridRow {
+                        Text("Starts from").foregroundStyle(.secondary)
+                        if studio.repo == nil {
+                            Text("The project's main branch, latest from its remote").foregroundStyle(.secondary)
+                        } else {
+                            basePicker
                         }
                     }
                     GridRow {
@@ -340,7 +428,7 @@ struct StudioView: View {
             header
             Divider()
             HSplitView {
-                chat.frame(minWidth: 420, idealWidth: 520)
+                chat.frame(minWidth: 440, idealWidth: 540)
                 documentPane.frame(minWidth: 340, idealWidth: 420)
             }
             Divider()
@@ -359,7 +447,9 @@ struct StudioView: View {
                         .font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
                 }
             }
+            .animation(.easeInOut, value: studio.repo)
             Button("Change…") { studio.chooseRepository() }
+            if studio.repo != nil { basePicker }
             Spacer()
             AgentRolesPicker(roles: $studio.roles)
             Button("Start Over") { studio.startOver() }
@@ -374,19 +464,25 @@ struct StudioView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 12) {
-                        ForEach(studio.messages) { message in MessageBubble(message: message).id(message.id) }
+                        ForEach(studio.messages) { message in
+                            MessageBubble(message: message)
+                                .id(message.id)
+                                .transition(.asymmetric(insertion: .move(edge: .bottom).combined(with: .opacity), removal: .opacity))
+                        }
                         if !studio.questions.isEmpty && studio.busy == nil {
-                            QuestionsCard(studio: studio).id("questions")
+                            QuestionStepper(studio: studio)
+                                .id("questions")
+                                .transition(.move(edge: .bottom).combined(with: .opacity))
                         }
                         if let busy = studio.busy {
-                            HStack(spacing: 8) { ProgressView().controlSize(.small); Text(busy).foregroundStyle(.secondary) }.id("busy")
+                            TypingIndicator(label: busy).id("busy").transition(.opacity)
                         }
                     }
                     .padding(20)
                 }
-                .onChange(of: studio.messages.count) { _, _ in
-                    withAnimation { proxy.scrollTo(studio.questions.isEmpty ? studio.messages.last?.id as AnyHashable? : "questions", anchor: .bottom) }
-                }
+                .onChange(of: studio.messages.count) { _, _ in scroll(proxy) }
+                .onChange(of: studio.busy) { _, _ in scroll(proxy) }
+                .onChange(of: studio.questions) { _, _ in scroll(proxy) }
             }
             Divider()
             HStack(alignment: .bottom, spacing: 10) {
@@ -396,17 +492,36 @@ struct StudioView: View {
                     .padding(10)
                     .background(RoundedRectangle(cornerRadius: 8).fill(Color(nsColor: .textBackgroundColor)))
                     .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.secondary.opacity(0.25)))
-                Button {
-                    Task {
-                        if studio.questions.isEmpty { let text = studio.input; studio.input = ""; await studio.send(text) }
-                        else { await studio.sendAnswers() }
-                    }
-                } label: { Image(systemName: "arrow.up.circle.fill").font(.title2) }
-                    .buttonStyle(.borderless)
-                    .keyboardShortcut(.return, modifiers: .command)
-                    .disabled(studio.busy != nil || studio.session == nil || (studio.questions.isEmpty && studio.input.isEmpty))
+                    .disabled(studio.busy != nil)
+                if studio.busy != nil {
+                    Button { studio.stop() } label: { Image(systemName: "stop.circle.fill").font(.title2).foregroundStyle(.red) }
+                        .buttonStyle(.borderless)
+                        .keyboardShortcut(".", modifiers: .command)
+                        .help("Stop Claude (⌘.)")
+                        .transition(.scale.combined(with: .opacity))
+                } else {
+                    Button {
+                        Task {
+                            if studio.questions.isEmpty { let text = studio.input; studio.input = ""; await studio.send(text) }
+                            else { await studio.sendAnswers() }
+                        }
+                    } label: { Image(systemName: "arrow.up.circle.fill").font(.title2) }
+                        .buttonStyle(.borderless)
+                        .keyboardShortcut(.return, modifiers: .command)
+                        .disabled(studio.session == nil || (studio.questions.isEmpty && studio.input.isEmpty))
+                        .transition(.scale.combined(with: .opacity))
+                }
             }
+            .animation(.easeInOut(duration: 0.15), value: studio.busy)
             .padding(14)
+        }
+    }
+
+    private func scroll(_ proxy: ScrollViewProxy) {
+        withAnimation(.easeOut(duration: 0.3)) {
+            if studio.busy != nil { proxy.scrollTo("busy", anchor: .bottom) }
+            else if !studio.questions.isEmpty { proxy.scrollTo("questions", anchor: .top) }
+            else if let last = studio.messages.last { proxy.scrollTo(last.id, anchor: .bottom) }
         }
     }
 
@@ -455,9 +570,11 @@ struct StudioView: View {
     private func saveAndDraft(overwrite: Bool) async {
         do {
             guard let url = try studio.save(overwrite: overwrite) else { confirmOverwrite = true; return }
-            studio.busy = "Drafting the plan… this usually takes a minute."
+            studio.busy = "Drafting the plan (usually about a minute)"
             defer { studio.busy = nil }
-            if let id = await app.draft(document: url.path, steps: "", request: "", agents: studio.roles.spec) {
+            var arguments = ["draft", url.path, "--json", "--agents", studio.roles.spec]
+            if let base = studio.baseRef { arguments += ["--base", base] }
+            if let id = await app.draftWith(arguments) {
                 app.selection = id
                 dismissWindow(id: "studio")
             } else {
@@ -469,82 +586,168 @@ struct StudioView: View {
     }
 }
 
-struct QuestionsCard: View {
+// One question at a time: options as rows with an explanation and a recommendation, number
+// keys to choose, Back/Next to move, and all answers sent together at the end.
+struct QuestionStepper: View {
     @Bindable var studio: StudioModel
+    @FocusState private var focused: Bool
+
+    private var question: InterviewQuestion { studio.questions[min(studio.questionIndex, studio.questions.count - 1)] }
+    private var isLast: Bool { studio.questionIndex >= studio.questions.count - 1 }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            ForEach(studio.questions) { q in
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(q.question).fontWeight(.semibold)
-                    FlowOptions(options: q.options, selected: studio.answers[q.id] ?? []) { option in
-                        var set = studio.answers[q.id] ?? []
-                        if q.multiple { if set.contains(option) { set.remove(option) } else { set.insert(option) } }
-                        else { set = set.contains(option) ? [] : [option] }
-                        studio.answers[q.id] = set
+            HStack {
+                Text("Question \(studio.questionIndex + 1) of \(studio.questions.count)")
+                    .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                    .contentTransition(.numericText())
+                Spacer()
+                HStack(spacing: 5) {
+                    ForEach(0..<studio.questions.count, id: \.self) { i in
+                        Capsule()
+                            .fill(i == studio.questionIndex ? Color.accentColor : (answered(i) ? Color.accentColor.opacity(0.45) : Color.secondary.opacity(0.25)))
+                            .frame(width: i == studio.questionIndex ? 18 : 7, height: 7)
+                            .onTapGesture { go(to: i) }
                     }
-                    TextField("Other (your own words)", text: Binding(get: { studio.otherAnswers[q.id] ?? "" }, set: { studio.otherAnswers[q.id] = $0 }))
-                        .textFieldStyle(.roundedBorder)
-                        .frame(maxWidth: 380)
                 }
             }
+            VStack(alignment: .leading, spacing: 10) {
+                Text(question.question).font(.title3.weight(.semibold)).fixedSize(horizontal: false, vertical: true)
+                if question.multiple { Text("Choose any that apply").font(.caption).foregroundStyle(.secondary) }
+                VStack(spacing: 6) {
+                    ForEach(Array(question.options.enumerated()), id: \.element.label) { index, option in
+                        OptionRow(index: index, option: option, multiple: question.multiple,
+                                  selected: studio.answers[question.id]?.contains(option.label) == true) { toggle(option.label) }
+                    }
+                    HStack(spacing: 10) {
+                        Image(systemName: "pencil").frame(width: 18).foregroundStyle(.secondary)
+                        TextField("Other: your own words", text: Binding(get: { studio.otherAnswers[question.id] ?? "" }, set: { studio.otherAnswers[question.id] = $0 }))
+                            .textFieldStyle(.plain)
+                    }
+                    .padding(.horizontal, 12).padding(.vertical, 10)
+                    .background(RoundedRectangle(cornerRadius: 9).fill(Color.secondary.opacity(0.06)))
+                }
+            }
+            .id(question.id)
+            .transition(.asymmetric(insertion: .move(edge: .trailing).combined(with: .opacity), removal: .move(edge: .leading).combined(with: .opacity)))
             HStack {
+                Button("Back") { go(to: studio.questionIndex - 1) }.disabled(studio.questionIndex == 0)
                 Spacer()
-                Button("Send Answers") { Task { await studio.sendAnswers() } }
-                    .buttonStyle(.borderedProminent)
+                Text("Press 1–\(min(question.options.count, 9)) to choose").font(.caption).foregroundStyle(.tertiary)
+                Spacer()
+                if isLast {
+                    Button("Send Answers") { Task { await studio.sendAnswers() } }.buttonStyle(.borderedProminent)
+                } else {
+                    Button("Next") { go(to: studio.questionIndex + 1) }.buttonStyle(.borderedProminent)
+                }
             }
         }
-        .padding(16)
-        .background(RoundedRectangle(cornerRadius: 12).fill(Color.accentColor.opacity(0.07)))
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.accentColor.opacity(0.25)))
+        .padding(18)
+        .clipped()
+        .background(RoundedRectangle(cornerRadius: 14).fill(Color.accentColor.opacity(0.06)))
+        .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.accentColor.opacity(0.22)))
+        .focusable()
+        .focused($focused)
+        .focusEffectDisabled()
+        .onKeyPress { press in
+            guard let digit = Int(press.characters), digit >= 1, digit <= min(question.options.count, 9) else { return .ignored }
+            toggle(question.options[digit - 1].label)
+            return .handled
+        }
+        .onAppear { focused = true }
+    }
+
+    private func answered(_ i: Int) -> Bool {
+        let q = studio.questions[i]
+        return !(studio.answers[q.id] ?? []).isEmpty || !(studio.otherAnswers[q.id] ?? "").isEmpty
+    }
+
+    private func toggle(_ label: String) {
+        let q = question
+        var set = studio.answers[q.id] ?? []
+        if q.multiple { if set.contains(label) { set.remove(label) } else { set.insert(label) } }
+        else { set = set.contains(label) ? [] : [label] }
+        withAnimation(.easeOut(duration: 0.15)) { studio.answers[q.id] = set }
+        // A single choice moves on by itself after a short beat.
+        if !q.multiple, !set.isEmpty, !isLast {
+            let from = studio.questionIndex
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(350))
+                if studio.questionIndex == from { go(to: from + 1) }
+            }
+        }
+    }
+
+    private func go(to index: Int) {
+        guard !studio.questions.isEmpty else { return }
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.9)) {
+            studio.questionIndex = max(0, min(studio.questions.count - 1, index))
+        }
+        focused = true
     }
 }
 
-// Option chips that wrap onto new lines.
-struct FlowOptions: View {
-    let options: [String]
-    let selected: Set<String>
-    let toggle: (String) -> Void
+struct OptionRow: View {
+    let index: Int
+    let option: InterviewOption
+    let multiple: Bool
+    let selected: Bool
+    let action: () -> Void
+    @State private var hovering = false
 
     var body: some View {
-        FlowLayout(spacing: 8) {
-            ForEach(options, id: \.self) { option in
-                Button { toggle(option) } label: {
-                    Text(option)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .background(Capsule().fill(selected.contains(option) ? Color.accentColor : Color.secondary.opacity(0.12)))
-                        .foregroundStyle(selected.contains(option) ? Color.white : Color.primary)
+        Button(action: action) {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: multiple ? (selected ? "checkmark.square.fill" : "square") : (selected ? "largecircle.fill.circle" : "circle"))
+                    .foregroundStyle(selected ? Color.accentColor : Color.secondary)
+                    .frame(width: 18)
+                    .contentTransition(.symbolEffect(.replace))
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 6) {
+                        Text(option.label).fontWeight(.medium)
+                        if option.recommended == true {
+                            Text("Recommended").font(.caption2.weight(.semibold))
+                                .padding(.horizontal, 6).padding(.vertical, 2)
+                                .background(Capsule().fill(Color.green.opacity(0.18)))
+                                .foregroundStyle(.green)
+                        }
+                    }
+                    if let detail = option.detail {
+                        Text(detail).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    }
                 }
-                .buttonStyle(.plain)
+                Spacer(minLength: 8)
+                if index < 9 { Text("\(index + 1)").font(.caption.monospacedDigit()).foregroundStyle(.tertiary) }
             }
+            .padding(.horizontal, 12).padding(.vertical, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 9).fill(selected ? Color.accentColor.opacity(0.16) : Color.secondary.opacity(hovering ? 0.12 : 0.06)))
+            .overlay(RoundedRectangle(cornerRadius: 9).stroke(selected ? Color.accentColor.opacity(0.6) : .clear, lineWidth: 1))
+            .contentShape(RoundedRectangle(cornerRadius: 9))
         }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .animation(.easeOut(duration: 0.12), value: hovering)
     }
 }
 
-struct FlowLayout: Layout {
-    var spacing: CGFloat = 8
+struct TypingIndicator: View {
+    let label: String
 
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let width = proposal.width ?? 600
-        var x: CGFloat = 0, y: CGFloat = 0, rowHeight: CGFloat = 0
-        for view in subviews {
-            let size = view.sizeThatFits(.unspecified)
-            if x > 0 && x + size.width > width { x = 0; y += rowHeight + spacing; rowHeight = 0 }
-            x += size.width + spacing
-            rowHeight = max(rowHeight, size.height)
-        }
-        return CGSize(width: width, height: y + rowHeight)
-    }
-
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        var x = bounds.minX, y = bounds.minY, rowHeight: CGFloat = 0
-        for view in subviews {
-            let size = view.sizeThatFits(.unspecified)
-            if x > bounds.minX && x + size.width > bounds.maxX { x = bounds.minX; y += rowHeight + spacing; rowHeight = 0 }
-            view.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
-            x += size.width + spacing
-            rowHeight = max(rowHeight, size.height)
+    var body: some View {
+        HStack(spacing: 10) {
+            PhaseAnimator([0, 1, 2]) { phase in
+                HStack(spacing: 4) {
+                    ForEach(0..<3) { i in
+                        Circle().fill(Color.secondary).frame(width: 7, height: 7)
+                            .opacity(phase == i ? 1 : 0.3)
+                            .scaleEffect(phase == i ? 1.15 : 0.9)
+                    }
+                }
+            } animation: { _ in .easeInOut(duration: 0.35) }
+            .padding(.horizontal, 12).padding(.vertical, 10)
+            .background(RoundedRectangle(cornerRadius: 12).fill(Color.secondary.opacity(0.1)))
+            Text(label + "…").foregroundStyle(.secondary).font(.callout)
         }
     }
 }
@@ -553,14 +756,19 @@ struct MessageBubble: View {
     let message: ChatMessage
 
     var body: some View {
-        HStack {
-            if message.role == .owner { Spacer(minLength: 60) }
-            Text(LocalizedStringKey(message.text))
-                .textSelection(.enabled)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 9)
-                .background(RoundedRectangle(cornerRadius: 12).fill(message.role == .owner ? Color.accentColor.opacity(0.18) : Color.secondary.opacity(0.1)))
-            if message.role == .assistant { Spacer(minLength: 60) }
+        switch message.role {
+        case .note:
+            HStack { Spacer(); Text(message.text).font(.caption).foregroundStyle(.secondary); Spacer() }
+        case .owner, .assistant:
+            HStack {
+                if message.role == .owner { Spacer(minLength: 60) }
+                Text(LocalizedStringKey(message.text))
+                    .textSelection(.enabled)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 9)
+                    .background(RoundedRectangle(cornerRadius: 12).fill(message.role == .owner ? Color.accentColor.opacity(0.18) : Color.secondary.opacity(0.1)))
+                if message.role == .assistant { Spacer(minLength: 60) }
+            }
         }
     }
 }

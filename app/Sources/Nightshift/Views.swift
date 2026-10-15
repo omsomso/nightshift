@@ -184,6 +184,13 @@ struct PlanDetail: View {
                 GridRow { Text("Repository").foregroundStyle(.secondary); Text(plan.repo).textSelection(.enabled) }
                 if let branch = plan.branch { GridRow { Text("Branch").foregroundStyle(.secondary); Text(branch).textSelection(.enabled) } }
                 if let agents = plan.agents { GridRow { Text("Agents").foregroundStyle(.secondary); Text(agents.replacingOccurrences(of: ":", with: " works, ") + " reviews") } }
+                if let base = plan.baseRef ?? plan.baseCommit.map({ String($0.prefix(7)) }) {
+                    GridRow {
+                        Text("Starts from").foregroundStyle(.secondary)
+                        Text([base, plan.baseCommit.map { String($0.prefix(7)) }, plan.baseSubject].compactMap { $0 }.removingDuplicates().joined(separator: " · "))
+                            .textSelection(.enabled)
+                    }
+                }
                 if plan.status != "draft" { GridRow { Text("Runner").foregroundStyle(.secondary); Text(plan.runner ? "running in the background" : "stopped") } }
                 if let rules = plan.rules { GridRow { Text("Project rules").foregroundStyle(.secondary); Text(rules.isEmpty ? "none found" : rules.joined(separator: ", ")) } }
             }
@@ -411,4 +418,8 @@ struct DifficultyRow: View {
             if let effort = task.effort, task.status != "draft" { Text("· ran at \(effort) effort").font(.caption).foregroundStyle(.secondary) }
         }
     }
+}
+
+extension Array where Element: Hashable {
+    func removingDuplicates() -> [Element] { var seen = Set<Element>(); return filter { seen.insert($0).inserted } }
 }

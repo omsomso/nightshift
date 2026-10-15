@@ -73,7 +73,7 @@ function planSection(state) {
     .reduce((sum, e) => sum + (Number(e.detail?.tokens?.input) || 0) + (Number(e.detail?.tokens?.output) || 0), 0);
   const hours = ((plan.finishedAt ? Date.parse(plan.finishedAt) : Date.now()) - Date.parse(plan.startedAt)) / 3_600_000;
   const out = ['', `## Plan \`${plan.id}\`: ${label}`, '',
-    `Branch \`${plan.branch}\` from \`${plan.baseCommit.slice(0, 12)}\` in \`${plan.repo}\`; worktree \`${plan.worktree}\`.`,
+    `Branch \`${plan.branch}\` from ${plan.baseRef ? `\`${plan.baseRef}\` @ ` : ''}\`${plan.baseCommit.slice(0, 12)}\` in \`${plan.repo}\`; worktree \`${plan.worktree}\`.`,
     `Limits used: ${dispatches}/${plan.limits.dispatches} dispatches, ${tokens.toLocaleString('en-US')}/${plan.limits.tokens.toLocaleString('en-US')} tokens, ` +
       `${hours.toFixed(1)}/${plan.limits.hours} hours.`];
   out.push(`Project rules: ${plan.rules?.length ? plan.rules.map(r => [r.path, ...(r.also ?? [])].join(' = ')).join(', ') : 'none found'}.`);
@@ -88,9 +88,8 @@ function planSection(state) {
   const commits = state.tasks.filter(t => t.commit).map(t => `- \`${t.commit.slice(0, 12)}\` ${t.title}`);
   if (commits.length) out.push('', 'Commits:', ...commits);
   if (plan.status === 'awaiting-approval') {
-    out.push('', `Final review: ${line(plan.final?.review?.reason)}.`, '', 'To approve, review the branch and merge it yourself:', '',
-      '```sh', `git -C ${plan.repo} log --stat ${plan.baseCommit.slice(0, 12)}..${plan.branch}`,
-      `git -C ${plan.repo} merge --no-ff ${plan.branch}`, `git -C ${plan.repo} worktree remove ${plan.worktree}`, '```');
+    out.push('', `Final review: ${line(plan.final?.review?.reason)}.`, '', `To approve, look at the branch, then merge it into ${plan.baseBranch ?? 'the current branch'} (nothing is pushed):`, '',
+      '```sh', `git -C ${plan.repo} log --stat ${plan.baseCommit.slice(0, 12)}..${plan.branch}`, `nightshift merge ${plan.id}`, '```');
   }
   return out;
 }
