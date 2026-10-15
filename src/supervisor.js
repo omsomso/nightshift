@@ -59,6 +59,7 @@ export class Supervisor {
     if (plan && id === plan.id) {
       if (plan.status !== 'blocked') throw new Error(`Plan ${id} is ${plan.status}, not blocked.`);
       plan.status = 'running';
+      if (plan.baseline && !plan.baseline.passed) delete plan.baseline;
       this.record(null, 'manual-retry', `Plan reopened. Previous blocker: ${plan.reason}`);
       delete plan.reason;
       this.store.save(this.state);
@@ -98,6 +99,7 @@ export class Supervisor {
         else if (command.type === 'interrupt') this.interrupt();
         else if (command.type === 'limit') this.setLimit(command.payload?.name, command.payload?.value);
         else if (command.type === 'difficulty') this.setDifficulty(command.payload?.id, command.payload?.level);
+        else if (command.type === 'skip') this.skip(command.payload?.id);
         else throw new Error('Unknown command.');
       } catch (error) {
         this.record(command.payload?.id ?? null, 'command-rejected', `${command.type}: ${error.message}`);
@@ -179,6 +181,7 @@ export class Supervisor {
     if (this.state.plan?.status !== undefined && this.state.plan.status !== 'running') return false;
     const task = this.state.tasks.find(candidate => candidate.status === 'ready' &&
       candidate.dependencies.every(id => this.state.tasks.some(other => other.id === id && other.status === 'done')));
+    if (this.workspace && this.state.plan && !this.state.plan.baseline) return this.runBaseline();
     if (!task) {
       if (this.workspace && this.state.tasks.every(t => t.status === 'done')) return this.finishPlan();
       return false;
@@ -296,6 +299,55 @@ export class Supervisor {
     this.record(task.id, 'checks-failed', reason.slice(0, 4000));
     this.store.save(this.state);
     return null;
+  }
+
+  // Before any work: the plan's checks must already pass, or every task would fail them.
+  // A failure blocks the plan at once instead of spending attempts on a broken baseline.
+  async runBaseline() {
+    const plan = this.state.plan;
+    const abort = new AbortController();
+    this.busy = true;
+    this.current = { task: { id: `${plan.id}:baseline` }, abort };
+    try {
+      this.record(null, 'baseline-started', plan.checks.join('; '));
+      this.store.save(this.state);
+      const checks = await this.workspace.runChecks({ signal: abort.signal });
+      if (abort.signal.aborted) throw abort.signal.reason;
+      this.record(null, 'baseline-checks', { passed: checks.passed, results: checks.results });
+      plan.baseline = { passed: checks.passed, at: new Date().toISOString() };
+      if (!checks.passed) {
+        plan.status = 'blocked';
+        plan.reason = `The plan's checks fail before any change, so every task would fail them. Fix the project or the checks, then retry the plan.\n${checkDigest(checks).slice(0, 3000)}`;
+        this.record(null, 'plan-blocked', plan.reason);
+        this.state.paused = true;
+      }
+      this.store.save(this.state);
+      return true;
+    } catch (error) {
+      plan.baseline = undefined;
+      plan.status = error instanceof InterruptedError ? 'running' : 'blocked';
+      plan.reason = error instanceof InterruptedError ? error.message : `Baseline checks could not run: ${error.message ?? String(error)}`;
+      this.state.paused = true;
+      this.record(null, 'plan-blocked', plan.reason);
+      this.store.save(this.state);
+      return true;
+    } finally {
+      this.busy = false;
+      this.current = null;
+    }
+  }
+
+  // The owner decides a task is not needed (for example a check-only step): it counts as
+  // done without a change or commit, and dependent tasks can proceed.
+  skip(id) {
+    const task = this.state.tasks.find(candidate => candidate.id === id);
+    if (!task) throw new Error(`Unknown task ${id}.`);
+    if (!['blocked', 'ready'].includes(task.status)) throw new Error(`Task ${id} is ${task.status}; only blocked or waiting tasks can be skipped.`);
+    this.record(id, 'skipped', `Skipped by the owner${task.reason ? `; it was: ${task.reason.slice(0, 300)}` : ''}`);
+    task.status = 'done';
+    task.skipped = true;
+    task.reason = 'Skipped by the owner.';
+    this.store.save(this.state);
   }
 
   // After the last task: clean tree, full checks, then a final review of the whole plan.

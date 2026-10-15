@@ -38,11 +38,11 @@ export class Workspace {
   // Stages everything and describes the change since the last commit on the branch.
   inspect() {
     git(this.worktree, ['add', '-A']);
-    const files = git(this.worktree, ['diff', '--cached', '--numstat', '-z', '--no-renames']).split('\0').filter(Boolean).map(entry => {
+    const files = git(this.worktree, ['diff', '--cached', '--numstat', '-z', '--no-renames', '--ignore-submodules=dirty']).split('\0').filter(Boolean).map(entry => {
       const [added, removed, ...path] = entry.split('\t');
       return { path: path.join('\t'), added: Number(added) || 0, removed: Number(removed) || 0, binary: added === '-' };
     });
-    const diff = git(this.worktree, ['diff', '--cached', '--no-renames']);
+    const diff = git(this.worktree, ['diff', '--cached', '--no-renames', '--ignore-submodules=dirty']);
     return { files, changedLines: files.reduce((sum, f) => sum + f.added + f.removed, 0), diff,
       reviewDiff: diff.length > reviewDiffChars ? `${diff.slice(0, reviewDiffChars)}\n[…diff truncated for review]` : diff };
   }
@@ -112,5 +112,7 @@ export class Workspace {
     return { stat, reviewDiff: diff.length > reviewDiffChars ? `${diff.slice(0, reviewDiffChars)}\n[…diff truncated for review]` : diff };
   }
 
-  clean() { return !git(this.worktree, ['status', '--porcelain']).trim(); }
+  // Dirty submodule contents (for example files a build generates inside them) do not count;
+  // a changed submodule commit does.
+  clean() { return !git(this.worktree, ['status', '--porcelain', '--ignore-submodules=dirty']).trim(); }
 }

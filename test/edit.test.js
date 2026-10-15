@@ -354,3 +354,61 @@ test('effort: rated difficulty sets the start, each retry goes one level up, rev
   const args = claudeArgs({ sessionId: 'x', outputSchema: {}, effort: 'high' });
   assert.equal(args[args.indexOf('--effort') + 1], 'high');
 });
+
+test('a failing baseline blocks the plan before any task runs; retry re-checks it', async t => {
+  const env = makeRepo(t);
+  writeFileSync(join(env.repo, 'notes', 'old.txt'), 'BAD from before\n');
+  git(env.repo, 'add', '-A');
+  git(env.repo, 'commit', '-q', '-m', 'broken baseline');
+  const worker = scriptedWorker();
+  const { store, workspace, supervisor } = startPlan(t, env, worker, scriptedReviewer());
+  await supervisor.run();
+  let state = store.read();
+  assert.equal(state.plan.status, 'blocked');
+  assert.match(state.plan.reason, /checks fail before any change[\s\S]*BAD in old\.txt/);
+  assert.equal(worker.calls.length, 0, 'no task was dispatched');
+  // The owner fixes the project on the plan branch, then reopens the plan.
+  writeFileSync(join(workspace.worktree, 'notes', 'old.txt'), 'fixed\n');
+  git(workspace.worktree, 'commit', '-q', '-am', 'fix baseline');
+  Store.enqueue(env.state, 'retry', { id: 'demo-plan' });
+  Store.enqueue(env.state, 'resume');
+  await supervisor.run();
+  state = store.read();
+  assert.equal(state.plan.status, 'awaiting-approval');
+  assert.equal(state.events.filter(e => e.type === 'baseline-checks').length, 2);
+});
+
+test('the owner can skip a check-only task; dependents proceed', async t => {
+  const env = makeRepo(t);
+  const worker = scriptedWorker({ one: {} }); // task one changes nothing, like a "confirm the baseline" step
+  const { store, supervisor } = startPlan(t, env, worker, scriptedReviewer());
+  await supervisor.run();
+  let state = store.read();
+  assert.deepEqual(state.tasks.map(x => x.status), ['blocked', 'ready']);
+  Store.enqueue(env.state, 'skip', { id: 'one' });
+  await supervisor.run();
+  state = store.read();
+  assert.deepEqual(state.tasks.map(x => [x.status, x.skipped === true]), [['done', true], ['done', false]]);
+  assert.equal(state.tasks[0].commit, undefined, 'skipped tasks are not committed');
+  assert.equal(state.plan.status, 'awaiting-approval');
+  const { plannerPrompt } = await import('../src/prompts.js');
+  assert.match(plannerPrompt({ doc: 'd.md' }), /Every task must change files\. Do not create check-only tasks/);
+});
+
+test('files a build changes inside a submodule do not count as the plan\'s change', async t => {
+  const env = makeRepo(t);
+  const sub = join(env.root, 'sub');
+  git(env.root, 'init', '-q', '-b', 'main', sub);
+  writeFileSync(join(sub, 'lib.txt'), 'library\n');
+  git(sub, 'add', '-A');
+  git(sub, 'commit', '-q', '-m', 'lib');
+  git(env.repo, '-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', sub, 'third_party/sub');
+  git(env.repo, 'commit', '-q', '-m', 'add submodule');
+  const { store, workspace, supervisor } = startPlan(t, env, scriptedWorker(), scriptedReviewer());
+  git(workspace.worktree, '-c', 'protocol.file.allow=always', 'submodule', 'update', '--init', '-q');
+  writeFileSync(join(workspace.worktree, 'third_party', 'sub', 'lib.txt'), 'patched by a build\n'); // dirty submodule
+  await supervisor.run();
+  const state = store.read();
+  assert.equal(state.plan.status, 'awaiting-approval', state.plan.reason);
+  assert.deepEqual(state.events.filter(e => e.type === 'change-inspected').map(e => e.detail.files), [['notes/one.txt'], ['notes/two.txt']]);
+});
