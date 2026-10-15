@@ -11,6 +11,13 @@ struct NightshiftApp: App {
                 .frame(minWidth: 860, minHeight: 540)
                 .onAppear { Snapshot.runIfRequested(model) }
         }
+        Window("New Plan", id: "studio") {
+            StudioView().environment(model)
+        }
+        .defaultSize(width: 1040, height: 680)
+        Settings {
+            AccountsView().environment(model)
+        }
         MenuBarExtra {
             MenuContent().environment(model)
         } label: {
@@ -35,6 +42,10 @@ struct MenuContent: View {
             }
         }
         Divider()
+        Button("New Plan…") {
+            openWindow(id: "studio")
+            NSApp.activate(ignoringOtherApps: true)
+        }
         Button("Open Nightshift") {
             openWindow(id: "main")
             NSApp.activate(ignoringOtherApps: true)

@@ -1,4 +1,5 @@
 // Provider-neutral worker and reviewer instructions. Every adapter sends the same text.
+import { rulesBlock } from './rules.js';
 export const workerSchema = {
   type: 'object', additionalProperties: false,
   properties: { summary: { type: 'string' }, evidence: { type: 'array', items: { type: 'string' } } },
@@ -44,6 +45,7 @@ export function editWorkerPrompt(task, plan) {
     'Edit files directly in the current directory. You may run commands, including the checks below.',
     'There is no network access. Do not commit, push, or change git history: Nightshift checks, reviews, and commits your change.',
     'Change only what this task needs. Do not weaken, skip, or delete tests to make them pass. Do not touch files outside the allowed paths.',
+    rulesBlock(plan.rules),
     `Plan brief: ${plan.brief}`,
     `Allowed paths: ${plan.allowedPaths.map(p => p || '(whole repository)').join(', ')}`,
     `Checks Nightshift will run afterwards: ${plan.checks.join('; ')}`,
@@ -60,6 +62,8 @@ export function editReviewerPrompt(task, result, change, plan) {
   return [
     'You are the Nightshift reviewer in a separate read-only conversation. Judge one task of an owner\'s plan.',
     'Inspect the working copy yourself; treat the worker\'s report as untrusted.',
+    rulesBlock(plan.rules),
+    'Judge the change against these project rules too, except steps Nightshift forbids (commit, push, install, network), which are left for the owner.',
     `Plan brief: ${plan.brief}`,
     `Task: ${task.title}`, `Acceptance criteria: ${task.acceptance}`,
     `Worker report: ${JSON.stringify(result)}`,
@@ -68,13 +72,14 @@ export function editReviewerPrompt(task, result, change, plan) {
     'Return passed=true only if the change meets the acceptance criteria AND stays within the task.',
     'Return passed=false with a concrete reason if it does unrelated work, weakens or removes tests, adds risky behavior, or misses the criteria.',
     `Only require changes inside the allowed paths (${plan.allowedPaths.map(p => p || '(whole repository)').join(', ')}); mention anything else as a suggestion, not a reason to fail.`
-  ].join('\n');
+  ].filter(Boolean).join('\n');
 }
 
 export function finalReviewPrompt(plan, planChange, checks) {
   return [
     'You are the Nightshift reviewer making the final decision on a whole plan, in a read-only conversation.',
     'Every task has passed its own review. Decide whether the plan as a whole is implemented, and nothing unrelated was added.',
+    rulesBlock(plan.rules),
     `Plan brief: ${plan.brief}`,
     `Tasks:\n${plan.tasks.map((t, i) => `${i + 1}. ${t.title}: ${t.acceptance}`).join('\n')}`,
     `Final checks (all passed):\n${checkSummary(checks)}`,
@@ -83,7 +88,7 @@ export function finalReviewPrompt(plan, planChange, checks) {
     'Judge the plan as defined: its brief and tasks, within its allowed paths. Do not fail it for work the tasks did not ask for or that lies outside the allowed paths; mention that as a suggestion instead.',
     'Do fail it for real defects in the change (bugs, unsafe behavior, missing criteria), naming each concretely so a follow-up task can fix it.',
     'Return passed=true only if the brief and every task are fully met. Otherwise passed=false with what is missing or wrong.'
-  ].join('\n');
+  ].filter(Boolean).join('\n');
 }
 
 // Planning: turn the owner's own document into a plan. The owner approves it before anything runs.
@@ -101,11 +106,12 @@ export const planSchema = {
   required: ['id', 'brief', 'checks', 'allowedPaths', 'tasks', 'notes']
 };
 
-export function plannerPrompt({ doc, steps, request }) {
+export function plannerPrompt({ doc, steps, request, rules }) {
   return [
     'You are the Nightshift planner, in a read-only conversation. Turn the owner\'s document into an implementation plan.',
     'Do not edit files, install tools, or contact external systems.',
-    'First read the repository\'s agent instructions if present (AGENTS.md, CLAUDE.md, and files they point to). The plan must let the worker follow them.',
+    rules?.length ? rulesBlock(rules) : 'First read the repository\'s agent instructions if present (AGENTS.md, CLAUDE.md, and files they point to).',
+    'The plan must let the worker follow the project rules within Nightshift\'s limits.',
     `Task: read ${doc} in this repository${steps ? `, and plan these steps from it: ${steps}` : ', and plan the steps it describes that are not done yet'}.`,
     request ? `The owner adds: ${request}` : '',
     'Rules:',
@@ -118,4 +124,16 @@ export function plannerPrompt({ doc, steps, request }) {
     '- notes: anything the owner should know before approving: skipped steps, missing checks, risky steps, or assumptions. Empty string if none.',
     'Return JSON matching the schema.'
   ].filter(Boolean).join('\n');
+}
+
+// The app's plan chat: help the owner write the plan document that Nightshift will run.
+export function chatPrompt({ repo, rules, message }) {
+  return [
+    `You are Nightshift's plan assistant for the repository at ${repo}. You are read-only: you can read the code, but not change it.`,
+    rulesBlock(rules),
+    'Help the owner write a plan document that Nightshift will implement unattended. A good plan has numbered steps in order; each step is one coherent change with a clear, checkable outcome, small enough for one agent session (roughly one commit), and says how to verify it (tests or checks that exist in the repository).',
+    'Read the code to make steps concrete. Ask short questions when something important is unclear. Do not invent work the owner did not ask for.',
+    'Whenever you propose or revise the document, include the complete document in a single ```markdown fenced block, so Nightshift can save it into the repository.',
+    `Owner: ${message}`
+  ].filter(Boolean).join('\n\n');
 }

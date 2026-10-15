@@ -247,3 +247,12 @@ test('smoke command refuses an unpinned Claude runtime before creating state', t
   assert.match(result.stderr, /claude version mismatch/);
   assert.equal(existsSync(f.stateDirectory), false);
 });
+
+test('a denied git commit is recorded but does not block, unlike other denials', async () => {
+  const events = [];
+  const result = await new ClaudeAdapter(options('git-denial')).execute(sampleTask, { onEvent: event => events.push(event) });
+  assert.equal(result.summary, 'Fixture résumé 🦉');
+  const denied = events.find(x => x.type === 'policy-denied');
+  assert.match(denied.command, /^git commit/);
+  assert.equal(events.some(x => x.type === 'approval-required'), false);
+});

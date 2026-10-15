@@ -144,3 +144,27 @@ export function buildPlanner(name, repository) {
   return { session: name === 'claude' ? new ClaudeSession(options) : new CodexSession(options),
     describe: `${name} ${runtime.version} [${auth}]` };
 }
+
+// What the app's Accounts view shows. Runs only local status commands; no model calls.
+export function providerStatus(name) {
+  const status = { name, enabled: !isDisabled(name), installed: false, command: null, version: null,
+    pinned: readConfig().pins?.[name] ?? null, signedIn: false, auth: null, problem: null };
+  try {
+    status.command = execFileSync('/bin/sh', ['-c', `command -v ${providerCommand(name)}`], { encoding: 'utf8' }).trim();
+    status.installed = Boolean(status.command);
+    status.version = installedVersion(name);
+  } catch { status.problem = `${name} is not installed.`; return status; }
+  try { status.auth = name === 'claude' ? requireSubscription(status.command) : requireChatgpt(status.command); status.signedIn = true; }
+  catch (error) { status.problem = error.message; }
+  if (!status.problem && status.version !== status.pinned) status.problem = status.pinned ? 'The installed version differs from the pinned one; run setup.' : 'Not set up yet; run setup.';
+  return status;
+}
+
+// Subscription sign-in only: Claude with --claudeai, Codex forced to ChatGPT.
+export function loginCommand(name) {
+  if (!providers[name]) throw new Error(`Unknown provider ${name}.`);
+  const command = providerCommand(name);
+  return name === 'claude'
+    ? { command, args: ['auth', 'login', '--claudeai'], env: subscriptionEnv() }
+    : { command, args: ['-c', 'forced_login_method="chatgpt"', 'login'], env: chatgptEnv() };
+}

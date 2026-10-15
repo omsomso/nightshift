@@ -11,9 +11,12 @@ import { Workspace } from './workspace.js';
 import { execFileSync } from 'node:child_process';
 import { createInterface } from 'node:readline/promises';
 import { fileURLToPath } from 'node:url';
-import { buildPlanner, providerNames, installedVersion, providerCommand, requireSubscription, requireChatgpt, isDisabled, defaultAgents } from './providers.js';
+import { buildPlanner, providerNames, installedVersion, providerCommand, requireSubscription, requireChatgpt, isDisabled, defaultAgents, providerStatus, loginCommand } from './providers.js';
 import { draftPlan } from './planner.js';
 import { home, planDir, readConfig, writeConfig, freePlanId } from './home.js';
+import { installIntegration } from './install.js';
+import { chatTurn } from './chat.js';
+import { spawnSync } from 'node:child_process';
 import { createPlan, saveDraft, startPlan, stopRunner, mergePlan, discardPlan, summarize, listPlans } from './plans.js';
 
 const usage = `Usage: node src/cli.js <command> [options]
@@ -24,6 +27,9 @@ const usage = `Usage: node src/cli.js <command> [options]
                                --base: start the plan's worktree from this commit instead of HEAD
   draft <doc> [same options]   Only draft the plan (review it, then \`start <id>\`)
   start <id> | stop <id>       Start or stop a plan's background runner
+  providers [--json]           Installed versions, pins, sign-ins, and on/off for each provider
+  login <provider>             Sign in with a subscription (claude.ai, ChatGPT); opens the browser
+  chat --repo path --message t Plan chat: Claude helps write the plan document [--session id] (JSON reply)
   disable <provider>           Turn claude or codex off: Nightshift will not start it (enable to undo)
   enable <provider>            Turn it back on
   list [--json]                All plans in ~/.nightshift/plans with progress
@@ -52,7 +58,7 @@ const { values, positionals } = parseArgs({ allowPositionals: true, options: {
   'max-dispatches': { type: 'string', default: '20' }, 'poll-seconds': { type: 'string', default: '30' },
   id: { type: 'string' }, title: { type: 'string' }, acceptance: { type: 'string' }, after: { type: 'string' },
   'max-attempts': { type: 'string', default: '2' }, since: { type: 'string' }, help: { type: 'boolean' },
-  plan: { type: 'string' }, steps: { type: 'string' }, request: { type: 'string' }, yes: { type: 'boolean' }, json: { type: 'boolean' },
+  plan: { type: 'string' }, message: { type: 'string' }, session: { type: 'string' }, steps: { type: 'string' }, request: { type: 'string' }, yes: { type: 'boolean' }, json: { type: 'boolean' },
   lines: { type: 'string', default: '40' }, base: { type: 'string' }
 } });
 const [command = 'status', argument] = positionals;
@@ -195,6 +201,7 @@ function setup() {
   config.updatedAt = new Date().toISOString();
   writeConfig(config);
   console.log(`Saved to ${home()}/config.json. Re-run setup after updating a CLI.`);
+  for (const [path, result] of installIntegration(config)) console.log(`${result}: ${path}`);
 }
 
 function printDraft(id, { plan: draft, notes, agents }) {
@@ -293,8 +300,29 @@ function toggleProvider(enabled) {
     (enabled ? '' : ` Plans already set up to use ${name} will refuse to run until you enable it.`));
 }
 
+function providers() {
+  const statuses = providerNames.map(providerStatus);
+  if (values.json) return console.log(JSON.stringify({ providers: statuses, defaultAgents: (() => { try { return defaultAgents(); } catch { return null; } })() }));
+  for (const s of statuses) {
+    console.log(`${s.name.padEnd(7)} ${s.enabled ? 'on ' : 'off'}  ${s.version ?? 'not installed'}  ${s.signedIn ? s.auth : 'not signed in'}${s.problem ? `  (${s.problem})` : ''}`);
+  }
+}
+
+function login() {
+  if (!providerNames.includes(argument)) throw new Error(`Give a provider: ${providerNames.join(' or ')}.`);
+  const { command, args, env } = loginCommand(argument);
+  const result = spawnSync(command, args, { stdio: 'inherit', env });
+  if (result.status !== 0) throw new Error(`${argument} sign-in did not complete (exit ${result.status}).`);
+  console.log(`${argument} signed in. Run setup to record it.`);
+}
+
+async function chat() {
+  if (!values.repo) throw new Error('chat requires --repo <path>.');
+  console.log(JSON.stringify(await chatTurn({ repo: values.repo, session: values.session, message: values.message })));
+}
+
 const commands = {
-  demo, serve, add, plan, setup, draft, run, list,
+  demo, serve, add, plan, setup, draft, run, list, providers, login, chat,
   disable: () => toggleProvider(false),
   enable: () => toggleProvider(true), logs, discard,
   start: () => start(),

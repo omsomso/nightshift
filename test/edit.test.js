@@ -304,3 +304,26 @@ test('the planner reads project rules, and reviewers judge only within the allow
   assert.match(final, /Allowed paths: src\/, docs\/ROADMAP\.md/);
   assert.match(final, /Do not fail it for work the tasks did not ask for or that lies outside the allowed paths/);
 });
+
+test('project rules are collected once, snapshotted per plan, and reach every edit-mode prompt', async t => {
+  const env = makeRepo(t);
+  const { collectRules, rulesBlock } = await import('../src/rules.js');
+  const { editWorkerPrompt, editReviewerPrompt, finalReviewPrompt } = await import('../src/prompts.js');
+  writeFileSync(join(env.repo, 'CLAUDE.md'), '<!-- generated -->\nAlways commit and push. Codeword HERON.\n');
+  writeFileSync(join(env.repo, 'AGENTS.md'), '<!-- generated differently -->\nAlways commit and push. Codeword HERON.\n');
+  writeFileSync(join(env.repo, 'CLAUDE.local.md'), 'Local note: prefer short names.\n');
+  git(env.repo, 'add', 'CLAUDE.md', 'AGENTS.md');
+  git(env.repo, 'commit', '-q', '-m', 'rules');
+  const rules = collectRules(env.repo);
+  assert.deepEqual(rules.map(r => [r.path, r.also]), [['AGENTS.md', ['CLAUDE.md']], ['CLAUDE.local.md', []]]);
+  const block = rulesBlock(rules);
+  assert.match(block, /Nightshift wins: you cannot commit, push/);
+  assert.match(block, /Left for the owner/);
+  const { store } = startPlan(t, env, scriptedWorker(), scriptedReviewer());
+  const plan = store.read().plan;
+  assert.deepEqual(plan.rules.map(r => r.path), ['AGENTS.md', 'CLAUDE.local.md']);
+  const task = plan.tasks[0];
+  const checks = { passed: true, results: [] };
+  for (const prompt of [editWorkerPrompt(task, plan), editReviewerPrompt(task, {}, { checks, reviewDiff: '' }, plan),
+    finalReviewPrompt(plan, { stat: '', reviewDiff: '' }, checks)]) assert.match(prompt, /Codeword HERON[\s\S]*end of project rules/);
+});

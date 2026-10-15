@@ -43,6 +43,21 @@ review judges only the plan's brief and tasks within its allowed paths; other
 observations are suggestions, not failures. The morning report shows the
 branch, diff summary, checks, and usage. Only the owner merges.
 
+## Project rules
+
+Nightshift's sandboxed agents do not load project instructions on their own (Claude's
+restricted mode skips `CLAUDE.md`; verified 2026-10-15). Nightshift therefore collects
+them itself (`src/rules.js`): `AGENTS.md` and `CLAUDE.md` at the repository root (from the
+plan's base commit), `CLAUDE.local.md`/`AGENTS.local.md` from the owner's checkout, and
+`AGENTS.md`/`CLAUDE.md` in parent folders up to the home folder. Identical texts are
+included once. The set is snapshotted when the plan is created (`plan.rules`) and added
+to every planner, worker, reviewer, and final-review prompt, with an explicit
+precedence note: Nightshift's limits win, and steps the rules require but Nightshift
+forbids (commit, push, install, network) are listed as left for the owner. A denied
+`git commit`/`push`/... attempt is recorded as `policy-denied` and does not block the
+task; any other denied request still does. The report and the app list the rule files
+a plan used.
+
 ## Kill switches (all enforced by the controller)
 
 | Limit | Default | When hit |

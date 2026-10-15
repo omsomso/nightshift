@@ -27,6 +27,10 @@ node src/cli.js setup                                  # once, and after updatin
 node src/cli.js run /path/to/repo/docs/PLAN.md --steps "1-10"
 ```
 
+`setup` also installs a `nightshift` command (in `~/.local/bin`) and a Nightshift skill for
+Claude Code and Codex, so any session in any project knows how to hand work to
+Nightshift when you ask it to.
+
 `run` has an agent turn the document's steps into a plan (one task per step, with
 acceptance criteria, checks, and allowed paths), shows it, and asks once. If you say
 yes, it runs in the background in its own worktree until the plan is done or needs
@@ -56,6 +60,12 @@ To save one provider's usage, turn it off: `node src/cli.js disable codex` (undo
 `enable codex`). Nightshift then never starts it, and new plans use Claude for both the
 work and the review, in separate conversations. Codex is currently turned off on the
 development Mac.
+
+**Project rules carry over.** Nightshift reads the repository's `AGENTS.md`/`CLAUDE.md`
+(and local and parent-folder ones), snapshots them when a plan starts, and gives them
+to every agent, whether you start the plan from a terminal, a Claude or Codex session,
+or the app. Where a project's rules ask for something Nightshift forbids (commit, push,
+install, network), Nightshift wins and the agent lists it as left for you.
 
 For a window and menu-bar view with notifications, build the app (see `app/README.md`):
 

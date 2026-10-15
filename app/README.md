@@ -1,12 +1,18 @@
 # Nightshift app
 
-A macOS window and menu-bar view over the Nightshift CLI. It lists every plan in
-`~/.nightshift/plans`, shows progress, blockers, limits, and the runner log, and
-offers the controls: approve and start a draft, pause or resume, stop the running
-turn, start or stop the background runner, retry after a blocker, open the worktree,
-show the report, and approve and merge a finished plan (with confirmation). It sends
-a notification when a plan newly needs you or is ready to merge. New Plan drafts a
-plan from a document; nothing runs until you approve it.
+The macOS entry point to Nightshift: a window, a menu-bar icon, and notifications.
+
+- **Plan Studio** (New Plan): choose a repository and talk the work through with Claude,
+  which reads the code and the project's rules (read-only) and writes a plan document
+  with numbered steps. Edit it in the right-hand pane, then Save and Draft Plan writes it
+  into the repository and drafts a Nightshift plan from it. Open Document… drafts from
+  a document you already have.
+- **Plans**: every plan in `~/.nightshift/plans` with progress, blockers, limits, project
+  rules, and the runner log; Approve and Start, Pause/Resume, Stop Turn, Start/Stop
+  Runner, Retry, Open Worktree, Report, and Approve and Merge (with confirmation).
+- **Accounts** (Settings, ⌘,): installed and pinned versions, sign-in status with a Sign In
+  button (subscription only; opens the browser), on/off per provider, and Run Setup.
+- Notifications when a plan newly needs you or is ready to merge.
 
 The app does no orchestration itself: every action runs `node src/cli.js …`, using the
 paths that `node src/cli.js setup` records in `~/.nightshift/config.json`. Run setup
@@ -21,14 +27,17 @@ open app/build/Nightshift.app
 
 Requires macOS 14 or newer. The script uses Xcode's toolchain when Xcode is installed,
 because the Command Line Tools' `swift-package` on this Mac failed to load (a library
-mismatch). Copy the app to /Applications if you want it in Launchpad.
+mismatch). Copy the app to /Applications if you want it in Launchpad. The icon is drawn by
+`app/icon/make_icon.swift`; run `app/icon/make-icns.sh` to rebuild `Resources/AppIcon.icns`.
 
 `NIGHTSHIFT_SNAPSHOT=<dir>` renders each plan's view to PNG and quits (a development
 aid; native controls appear as placeholders in those images).
 
-## Verified (2026-10-14)
+## Verified
 
-Built with Swift 6.4 (Xcode toolchain) on macOS 26.6. Rendered against fixture plans
-in the ready-to-merge, blocked, and draft states. Clicking through the controls in the
-live window has not been verified by the developer; each control maps to a CLI command
-covered by the Node test suite.
+2026-10-14: built with Swift 6.4 (Xcode toolchain) on macOS 26.6; plan views rendered
+against fixture plans. 2026-10-15: Plan Studio, Accounts, and the icon build cleanly;
+the CLI commands behind them (`chat`, `providers`, `login`, `enable`/`disable`,
+`setup`, `draft`) are covered by the Node tests, and a live plan-chat turn returned
+project rules correctly. The new windows' on-screen layout has not been checked by the
+developer (no screen access); check Plan Studio and Accounts after building.

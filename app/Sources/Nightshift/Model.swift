@@ -23,6 +23,7 @@ struct Plan: Decodable, Identifiable, Hashable {
     let blocker: String?
     let current: CurrentTask?
     let finalReview: String?
+    let rules: [String]?
     let tasks: [PlanTask]
     let limits: Limits?
     let lastEvent: LastEvent?
@@ -274,6 +275,45 @@ final class AppModel {
                 UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "\(plan.id)-\(Date().timeIntervalSince1970)", content: content, trigger: nil))
             }
             previousHeadlines[plan.id] = needs
+        }
+    }
+}
+
+// `node src/cli.js providers --json`
+struct ProviderStatus: Decodable, Identifiable, Hashable {
+    let name: String
+    let enabled: Bool
+    let installed: Bool
+    let version: String?
+    let pinned: String?
+    let signedIn: Bool
+    let auth: String?
+    let problem: String?
+    var id: String { name }
+    var displayName: String { name == "claude" ? "Claude" : "Codex" }
+}
+
+struct ProvidersResponse: Decodable {
+    let providers: [ProviderStatus]
+    let defaultAgents: String?
+}
+
+// `node src/cli.js chat --json` reply.
+struct ChatReply: Decodable {
+    let session: String?
+    let repo: String
+    let reply: String
+    let document: String?
+}
+
+extension AppModel {
+    func loadProviders() async -> ProvidersResponse? {
+        do {
+            let output = try await CLI.load().run(["providers", "--json"])
+            return try JSONDecoder().decode(ProvidersResponse.self, from: Data(output.utf8))
+        } catch {
+            errorMessage = error.localizedDescription
+            return nil
         }
     }
 }

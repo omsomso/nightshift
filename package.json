@@ -8,7 +8,7 @@
     "node": ">=22.13"
   },
   "scripts": {
-    "test": "node --test",
+    "test": "NIGHTSHIFT_HOME=\"$(mktemp -d)\" NIGHTSHIFT_INSTALL_ROOT=\"$(mktemp -d)\" node --test",
     "demo": "node src/cli.js demo",
     "status": "node src/cli.js status",
     "smoke": "node src/smoke.js",
