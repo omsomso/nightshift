@@ -67,6 +67,8 @@ Exit: one real task and follow-up run through each adapter without desktop click
 - [ ] Cross-provider review using shared artifacts and explicit task context.
 - [x] Edit mode: one worktree per plan, Nightshift-run checks and gates, Nightshift commits, owner merges (docs/EDIT_MODE.md).
 - [x] OS sandboxes for edit-mode workers (Claude bash sandbox, Codex workspace-write; no network) — live-probed.
+- [x] Plans start from the fetched main branch (or `--base`), not the current checkout; planning reads a snapshot of that commit; merge targets that branch.
+- [ ] Run project checks in a sandbox too (a VSTS cmake step wrote outside the worktree).
 - [ ] Concurrent tasks within one plan and controlled integration between plans.
 - [ ] Bounded research/ideation tasks with recorded decision evidence.
 
@@ -79,6 +81,6 @@ read-only runs have all passed review (see the setup docs). Edit mode completed 
 plans on a toy project (claude:codex and codex:claude; see docs/EDIT_MODE.md).
 Neither adapter has run on the owner's VM or accessed existing chats. Commands run from
 an agent sandbox may lack network access to OpenAI; run live checks from a normal terminal.
-Run `npm test` (119 tests) and `npm run demo` for the offline baseline. The live smoke
+Run `npm test` (124 tests) and `npm run demo` for the offline baseline. The live smoke
 commands are separate and can consume provider usage. Their version pins are operator
 checks, not declarations that a specific release has been certified.

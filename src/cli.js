@@ -16,6 +16,7 @@ import { draftPlan } from './planner.js';
 import { home, planDir, readConfig, writeConfig, freePlanId } from './home.js';
 import { installIntegration } from './install.js';
 import { chatTurn } from './chat.js';
+import { resolveBase, snapshot, listBranches, describeBase } from './base.js';
 import { listProjects, workspaceRoots } from './projects.js';
 import { spawnSync } from 'node:child_process';
 import { setTaskDifficulty } from './plans.js';
@@ -27,7 +28,8 @@ const usage = `Usage: node src/cli.js <command> [options]
   setup                        Record the installed Claude/Codex versions and check sign-ins
   run <doc> [--steps s]        Draft a plan from a document, ask once, then run it in the background
         [--repo path] [--agents spec] [--request text] [--base ref] [--yes]
-                               --base: start the plan's worktree from this commit instead of HEAD
+                               --base: start from this branch or commit (default: the fetched main branch)
+  branches --repo path         Branches to start from, and the default (fetches origin) [--json]
   draft <doc> [same options]   Only draft the plan (review it, then \`start <id>\`)
   start <id> | stop <id>       Start or stop a plan's background runner
   providers [--json]           Installed versions, pins, sign-ins, and on/off for each provider
@@ -41,7 +43,7 @@ const usage = `Usage: node src/cli.js <command> [options]
   list [--json]                All plans in ~/.nightshift/plans with progress
   logs <id> [--lines n]        Print the last n lines (default 40) of a plan's runner log
   discard <id> --yes           Remove an unmerged plan: its draft, or its worktree, branch, and directory
-  merge <id>                   Approve: merge a finished plan's branch into the repository's current branch
+  merge <id>                   Approve: merge a finished plan into the branch it started from (nothing is pushed)
 
   demo [state]                 Seed and run the simulated demo
   status [state]               Print saved state (works while a runner is active)
@@ -67,7 +69,7 @@ const { values, positionals } = parseArgs({ allowPositionals: true, options: {
   'max-dispatches': { type: 'string', default: '20' }, 'poll-seconds': { type: 'string', default: '30' },
   id: { type: 'string' }, title: { type: 'string' }, acceptance: { type: 'string' }, after: { type: 'string' },
   'max-attempts': { type: 'string', default: '2' }, since: { type: 'string' }, help: { type: 'boolean' },
-  plan: { type: 'string' }, message: { type: 'string' }, session: { type: 'string' }, notes: { type: 'boolean' }, cwd: { type: 'string' }, 'with-rules': { type: 'boolean' }, steps: { type: 'string' }, request: { type: 'string' }, yes: { type: 'boolean' }, json: { type: 'boolean' },
+  plan: { type: 'string' }, 'no-fetch': { type: 'boolean' }, message: { type: 'string' }, session: { type: 'string' }, notes: { type: 'boolean' }, cwd: { type: 'string' }, 'with-rules': { type: 'boolean' }, steps: { type: 'string' }, request: { type: 'string' }, yes: { type: 'boolean' }, json: { type: 'boolean' },
   lines: { type: 'string', default: '40' }, base: { type: 'string' }
 } });
 const [command = 'status', argument] = positionals;
@@ -214,7 +216,7 @@ function setup() {
 }
 
 function printDraft(id, { plan: draft, notes, agents }) {
-  console.log(`\nPlan ${id} for ${draft.repo} (${agents}), starting from ${draft.base}:\n${draft.brief}\n`);
+  console.log(`\nPlan ${id} for ${draft.repo} (${agents}), starting from ${draft.baseRef ?? draft.base}${draft.base ? ` @ ${draft.base.slice(0, 7)}` : ''}:\n${draft.brief}\n`);
   draft.tasks.forEach((task, i) => console.log(`  ${i + 1}. ${task.title}${task.difficulty ? `  [${task.difficulty}: ${task.difficultyReason ?? ''}]` : ''}\n     done when: ${task.acceptance}`));
   console.log(`\nChecks: ${draft.checks.join('; ')}\nAllowed paths: ${draft.allowedPaths.map(p => p || '(whole repository)').join(', ')}`);
   console.log(`Limits: ${draft.limits.attemptsPerTask} attempts per task, ${draft.limits.dispatches} dispatches, ` +
@@ -227,19 +229,17 @@ async function draft() {
   if (!argument) throw new Error('Give the document to plan from, for example: draft docs/ROADMAP.md');
   const doc = resolve(argument);
   const repo = execFileSync('git', ['-C', values.repo ? resolve(values.repo) : resolve(doc, '..'), 'rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim();
-  let base = 'HEAD';
-  if (values.base) {
-    try { execFileSync('git', ['-C', repo, 'rev-parse', '--verify', '--quiet', `${values.base}^{commit}`], { stdio: 'ignore' }); }
-    catch { throw new Error(`--base ${values.base} is not a commit in ${repo}.`); }
-    base = values.base;
-  }
+  // Start from a known-good branch (by default the fetched main branch), not the checkout,
+  // and let the planner read exactly that commit.
+  const base = resolveBase(repo, { base: values.base });
+  const root = snapshot(repo, base.commit);
   const agents = values.agents ?? defaultAgents();
   const plannerName = agents.split(':')[0];
-  const planner = buildPlanner(plannerName, repo);
-  console.error(`Drafting with ${planner.describe}…`);
-  const drafted = await draftPlan({ session: planner.session, repo, doc, steps: values.steps, request: values.request });
+  const planner = buildPlanner(plannerName, root);
+  console.error(`Drafting with ${planner.describe}, from ${describeBase(base)}…`);
+  const drafted = await draftPlan({ session: planner.session, repo, root, doc, steps: values.steps, request: values.request, base });
   const id = freePlanId(drafted.plan.id);
-  const record = { ...drafted, plan: { ...drafted.plan, id, base }, agents, draftedAt: new Date().toISOString() };
+  const record = { ...drafted, plan: { ...drafted.plan, id }, agents, draftedAt: new Date().toISOString() };
   const dir = saveDraft(id, record);
   if (values.json) console.log(JSON.stringify({ id, dir, draft: record }));
   else printDraft(id, record);
@@ -327,8 +327,15 @@ function login() {
 
 async function chat() {
   if (!values.repo && !values.notes && !values.session) throw new Error('chat requires --notes (interview from notes) or --repo <path>.');
-  console.log(JSON.stringify(await chatTurn({ repo: values.repo, session: values.session, message: values.message,
-    notes: values.notes, cwd: values.cwd, withRules: values['with-rules'] })));
+  // The app's Stop button sends SIGTERM: stop the Claude turn (killing its process), then exit.
+  const abort = new AbortController();
+  const stop = () => abort.abort(new Error('Stopped by the owner.'));
+  process.once('SIGTERM', stop);
+  process.once('SIGINT', stop);
+  try {
+    console.log(JSON.stringify(await chatTurn({ repo: values.repo, session: values.session, message: values.message,
+      notes: values.notes, cwd: values.cwd, withRules: values['with-rules'], signal: abort.signal })));
+  } finally { process.off('SIGTERM', stop); process.off('SIGINT', stop); }
 }
 
 function effort() {
@@ -343,6 +350,16 @@ function effort() {
   if (values.json) return console.log(JSON.stringify(settings));
   console.log(`Workers start at the task's difficulty (low, medium, high), one level higher per retry, within ${settings.min}…${settings.max}.\n` +
     `Reviewers: ${settings.reviewer}. Planner and interviewer: ${settings.planner}. New plans take these settings when they start.`);
+}
+
+function branches() {
+  if (!values.repo) throw new Error('branches requires --repo <path>.');
+  const repo = execFileSync('git', ['-C', resolve(values.repo), 'rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim();
+  const base = resolveBase(repo, { fetch: !values['no-fetch'] });
+  const list = listBranches(repo);
+  if (values.json) return console.log(JSON.stringify({ repo, default: base, branches: list }));
+  console.log(`Default start: ${describeBase(base)}`);
+  for (const b of list) console.log(`  ${b.ref.padEnd(40)} ${b.date.slice(0, 16).replace('T', ' ')}  ${b.subject.slice(0, 60)}`);
 }
 
 function projects() {
@@ -365,7 +382,7 @@ function workspaces() {
 }
 
 const commands = {
-  demo, serve, add, plan, setup, draft, run, list, providers, login, chat, projects, workspaces, effort,
+  demo, serve, add, plan, setup, draft, run, list, providers, login, chat, projects, workspaces, effort, branches,
   difficulty: () => {
     if (!values.plan || !argument || !positionals[2]) throw new Error('Use: difficulty <task-id> <low|medium|high> --plan <id>');
     console.log(setTaskDifficulty(values.plan, argument, positionals[2]) === 'queued' ? 'Queued: applies from the task\'s next attempt.' : 'Draft updated.');

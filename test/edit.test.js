@@ -95,7 +95,7 @@ test('a plan runs task by task, Nightshift commits each, and the branch waits fo
   assert.match(reviewer.calls.at(-1).diff, /notes\/one\.txt[\s\S]*notes\/two\.txt/);
   const report = cli(env, 'report');
   assert.match(report, /ready for your review and merge/);
-  assert.match(report, /git -C .* merge --no-ff nightshift\/demo-plan/);
+  assert.match(report, /nightshift merge demo-plan/);
 });
 
 test('failing checks send the task back with the check output, and a fix passes', async t => {

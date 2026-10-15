@@ -60,8 +60,12 @@ The Nightshift app's New Plan window runs this same interview, if the owner pref
    (`nightshift run <doc>` drafts and asks in one go in a terminal; do not pass `--yes`
    unless the user has already approved the plan.)
 
-Before starting, check that the repository's own work is committed (plans start from
-the last commit) and that its checks pass today.
+Plans start from the project's main branch as it is on `origin` (fetched first), not
+from the current checkout, so work merged elsewhere is included and uncommitted or
+unmerged local work is not. The draft prints where it starts; `--base <branch|commit>`
+chooses another start and `nightshift branches --repo <path>` lists candidates. Before
+starting, check that the work the plan needs is merged there and that the checks pass on
+it. `merge` later merges into that same branch locally; nothing is pushed.
 
 ## Watching and steering
 

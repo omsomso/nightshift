@@ -107,13 +107,15 @@ export const planSchema = {
   required: ['id', 'brief', 'checks', 'allowedPaths', 'tasks', 'notes']
 };
 
-export function plannerPrompt({ doc, steps, request, rules }) {
+export function plannerPrompt({ doc, docText, steps, request, rules, base }) {
   return [
     'You are the Nightshift planner, in a read-only conversation. Turn the owner\'s document into an implementation plan.',
     'Do not edit files, install tools, or contact external systems.',
     rules?.length ? rulesBlock(rules) : 'First read the repository\'s agent instructions if present (AGENTS.md, CLAUDE.md, and files they point to).',
     'The plan must let the worker follow the project rules within Nightshift\'s limits.',
-    `Task: read ${doc} in this repository${steps ? `, and plan these steps from it: ${steps}` : ', and plan the steps it describes that are not done yet'}.`,
+    `Task: plan from the owner's document ${doc}${steps ? `, these steps: ${steps}` : ', the steps it describes that are not done yet'}.`,
+    base ? `This folder is a read-only snapshot of ${base}, the code the plan will start from (not necessarily what is checked out). Judge what is already done against it.` : '',
+    docText ? `The document (it may not be committed yet):\n----- ${doc} -----\n${docText.trim()}\n----- end of document -----` : '',
     request ? `The owner adds: ${request}` : '',
     'Rules:',
     '- One task per step, in the document\'s order. Do not invent, merge, split, or reorder steps. If a step is already done in the code, leave it out and say so in notes.',
@@ -151,7 +153,7 @@ export function interviewPrompt({ projects, rules, notes, repo }) {
     'Work like this:',
     `1. ${repo ? 'Confirm the project' : 'Work out which project the notes are about, reading code to confirm'}, and state it in a block exactly like:\n\`\`\`nightshift-repo\n/absolute/path/to/project\n\`\`\`\nIf the notes cover several projects, pick the one most notes concern and say which notes belong elsewhere.`,
     '2. Read the relevant code and the chosen project\'s own rules (its AGENTS.md / CLAUDE.md) so the steps fit how the project works.',
-    '3. Ask what you need to know, a few questions at a time (at most 4 per turn), as multiple choice whenever sensible, in a block exactly like:\n```nightshift-questions\n[{"question": "...", "options": ["...", "..."], "multiple": false}]\n```\nThe owner may also answer in their own words. Do not ask what the code already answers.',
+    '3. Ask what you need to know, a few questions at a time (at most 4 per turn), as multiple choice whenever sensible, in a block exactly like:\n```nightshift-questions\n[{"question": "...", "options": [{"label": "short answer", "detail": "one line on what it means or costs", "recommended": true}, {"label": "...", "detail": "..."}], "multiple": false}]\n```\nKeep labels short; put the explanation in detail. Mark at most one option per question as recommended, and only when you have a reason. The owner may also answer in their own words. Do not ask what the code already answers.',
     '4. When you know enough, write the complete roadmap in one ```markdown block (every step must change files; no check-only steps, because Nightshift runs the checks itself before, during, and after): a # title, two or three sentences on what it covers and what it leaves out, then numbered steps in a sensible order. Each step is one coherent change with a checkable outcome and says how to verify it (tests or checks that exist in the project), small enough for one agent session (roughly one commit). Include every note the owner wants done; do not add work they did not ask for.',
     '5. Revise the roadmap when asked, always repeating the complete document.',
     `Owner's notes:\n${notes}`

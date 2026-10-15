@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, existsSync, realpathSync } from 'node:fs';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, existsSync, realpathSync, readdirSync } from 'node:fs';
+import { execFileSync, spawnSync, spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -123,10 +123,11 @@ test('draft and run accept --base; the plan records it and its worktree starts t
   const head = git(e.repo, 'rev-parse', 'HEAD');
 
   const drafted = JSON.parse(e.cli('draft', 'docs/PLAN.md', '--json', '--base', 'HEAD~1'));
-  assert.equal(drafted.draft.plan.base, 'HEAD~1');
+  assert.equal(drafted.draft.plan.base, first, 'the draft pins the exact commit it planned against');
+  assert.equal(drafted.draft.plan.baseRef, 'HEAD~1');
   e.cli('start', drafted.id);
   let state = Store.inspect(join(e.env.NIGHTSHIFT_HOME, 'plans', drafted.id));
-  assert.equal(state.plan.base, 'HEAD~1');
+  assert.equal(state.plan.baseRef, 'HEAD~1');
   assert.equal(state.plan.baseCommit, first);
   assert.equal(existsSync(join(state.plan.worktree, 'later.txt')), false, 'the worktree starts from the chosen commit');
 
@@ -137,13 +138,14 @@ test('draft and run accept --base; the plan records it and its worktree starts t
   assert.equal(state.plan.baseCommit, first);
 
   const plain = JSON.parse(e.cli('draft', 'docs/PLAN.md', '--json'));
-  assert.equal(plain.draft.plan.base, 'HEAD');
+  assert.equal(plain.draft.plan.baseRef, 'main', 'without a remote, the local main branch');
+  assert.equal(plain.draft.plan.base, head);
   e.cli('start', plain.id);
   assert.equal(Store.inspect(join(e.env.NIGHTSHIFT_HOME, 'plans', plain.id)).plan.baseCommit, head);
 
   const bad = spawnSync(process.execPath, [cliFile, 'draft', 'docs/PLAN.md', '--base', 'no-such-ref'], { cwd: e.repo, env: e.env, encoding: 'utf8' });
   assert.equal(bad.status, 1);
-  assert.match(bad.stderr, /--base no-such-ref is not a commit/);
+  assert.match(bad.stderr, /no-such-ref is not a commit/);
 });
 
 test('a turned-off provider is never started, and defaults follow the switch', t => {
@@ -191,7 +193,7 @@ test('plan chat keeps one conversation and extracts the plan document', t => {
   assert.deepEqual(status.providers.map(p => [p.name, p.enabled, p.signedIn]), [['codex', true, true], ['claude', true, true]]);
 });
 
-test('interview from notes: picks the project, asks questions, then writes the roadmap', t => {
+test('interview from notes: picks the project, asks questions, then writes the roadmap', async t => {
   const e = setupEnv(t);
   e.cli('setup');
   e.cli('workspaces', 'set', e.root);
@@ -199,7 +201,10 @@ test('interview from notes: picks the project, asks questions, then writes the r
   assert.ok(listed.projects.some(p => p.path === e.repo && p.name === 'repo'));
   const first = JSON.parse(e.cli('chat', '--notes', '--message', 'notes: two notes please, keep them short'));
   assert.equal(realpathSync(first.repo), realpathSync(e.repo), 'the interviewer picked the project');
-  assert.deepEqual(first.questions, [{ question: 'Keep notes short?', multiple: false, options: ['Yes', 'No'] }]);
+  assert.deepEqual(first.questions, [{ question: 'Keep notes short?', multiple: false, options: [{ label: 'Yes' }, { label: 'No' }] }]);
+  const { parseReply } = await import('../src/chat.js');
+  const rich = parseReply('```nightshift-questions\n[{"question": "Q?", "options": [{"label": "A", "detail": "why A", "recommended": true}, "B", {"nolabel": 1}]}]\n```');
+  assert.deepEqual(rich.questions[0].options, [{ label: 'A', detail: 'why A', recommended: true }, { label: 'B' }]);
   assert.doesNotMatch(first.reply, /nightshift-(repo|questions)/, 'machine blocks are not shown as text');
   const second = JSON.parse(e.cli('chat', '--session', first.session, '--cwd', first.cwd, '--repo', first.repo, '--with-rules',
     '--message', 'Keep notes short?: Yes'));
@@ -220,4 +225,61 @@ test('drafts carry difficulty ratings the owner can change; effort settings are 
   assert.match(e.cli('difficulty', 'note-two', 'medium', '--plan', drafted.id), /Draft updated/);
   const listed = e.json().plans.find(p => p.id === drafted.id);
   assert.equal(listed.tasks[1].difficulty, 'medium');
+});
+
+test('by default a plan starts from the fetched main branch, not the checkout, and plans from a snapshot of it', async t => {
+  const e = setupEnv(t);
+  e.cli('setup');
+  // A remote whose main is ahead of this checkout, which sits on an old feature branch.
+  const remote = join(e.root, 'origin.git');
+  git(e.root, 'init', '-q', '--bare', '-b', 'main', remote);
+  git(e.repo, 'remote', 'add', 'origin', remote);
+  git(e.repo, 'push', '-q', '-u', 'origin', 'main');
+  git(e.repo, 'remote', 'set-head', 'origin', 'main');
+  const other = join(e.root, 'other');
+  git(e.root, 'clone', '-q', remote, other);
+  writeFileSync(join(other, 'merged-elsewhere.txt'), 'work merged by another session\n');
+  git(other, 'add', '-A');
+  git(other, 'commit', '-q', '-m', 'merged elsewhere');
+  git(other, 'push', '-q', 'origin', 'main');
+  const upstream = git(other, 'rev-parse', 'HEAD');
+  git(e.repo, 'checkout', '-q', '-b', 'old-feature');
+  const listed = JSON.parse(e.cli('branches', '--repo', e.repo, '--json'));
+  assert.equal(listed.default.ref, 'origin/main');
+  assert.equal(listed.default.commit, upstream);
+  assert.ok(listed.branches.some(b => b.ref === 'old-feature'));
+  const drafted = JSON.parse(e.cli('draft', 'docs/PLAN.md', '--json'));
+  assert.deepEqual([drafted.draft.plan.baseRef, drafted.draft.plan.base, drafted.draft.plan.baseBranch], ['origin/main', upstream, 'main']);
+  const snapshots = readdirSync(join(e.env.NIGHTSHIFT_HOME, 'snapshots'));
+  assert.equal(snapshots.length, 1);
+  assert.ok(existsSync(join(e.env.NIGHTSHIFT_HOME, 'snapshots', snapshots[0], 'merged-elsewhere.txt')), 'the planner reads the fetched main');
+  e.cli('start', drafted.id);
+  await until(() => e.json().plans.find(p => p.id === drafted.id && p.status === 'awaiting-approval'));
+  const plan = Store.inspect(join(e.env.NIGHTSHIFT_HOME, 'plans', drafted.id)).plan;
+  assert.equal(plan.baseCommit, upstream);
+  assert.ok(existsSync(join(plan.worktree, 'merged-elsewhere.txt')), 'the plan starts from the fetched main');
+  // Approval merges into main (the base branch), not into the checked-out old-feature branch.
+  assert.match(e.cli('merge', drafted.id), /into main/);
+  assert.equal(git(e.repo, 'branch', '--show-current'), 'old-feature', 'the checkout was not switched');
+  assert.match(git(e.repo, 'log', '-1', '--format=%s', 'main'), /Merge Nightshift plan/);
+  assert.equal(git(e.repo, 'rev-parse', 'old-feature~0'), git(e.repo, 'rev-parse', 'HEAD'));
+});
+
+test('stopping a chat turn ends the Claude process and the command at once', async t => {
+  const e = setupEnv(t);
+  e.cli('setup');
+  e.cli('workspaces', 'set', e.root);
+  const child = spawn(process.execPath, [cliFile, 'chat', '--notes', '--message', 'take your time'], { cwd: e.repo, env: e.env, stdio: ['ignore', 'pipe', 'pipe'] });
+  let stderr = '';
+  child.stderr.on('data', chunk => { stderr += chunk; });
+  const exited = new Promise(done => child.once('exit', code => done(code)));
+  await new Promise(r => setTimeout(r, 1500));
+  const started = Date.now();
+  child.kill('SIGTERM');
+  const code = await exited;
+  assert.notEqual(code, 0);
+  assert.ok(Date.now() - started < 3000, 'stopped promptly');
+  assert.match(stderr, /Stopped by the owner/);
+  // The stopped Claude process may need a moment to exit.
+  await until(() => !spawnSync('pgrep', ['-f', 'take your time'], { encoding: 'utf8' }).stdout.trim(), 2000);
 });

@@ -285,13 +285,13 @@ s += [PageBreak(), P('Run a plan from your docs', h1),
              ['--steps "..."', 'Which steps to plan: "1-10", "the M2 section", "everything not done yet". Omit for all open steps.'],
              ['--request "..."', 'Extra guidance for the planner, for example "keep changes small".'],
              ['--agents claude', 'Who works and who reviews. With Codex off, Claude does both, in separate conversations.'],
-             ['--base main', 'Start from a specific branch or commit instead of the current one.'],
+             ['--base v1.2', 'Start from another branch, tag, or commit. By default a plan starts from the project\'s main branch, freshly fetched from its remote, whatever is checked out.'],
              ['--yes', 'Skip the confirmation question (for scripts).']], [38 * mm, FULL - 38 * mm], mono_first=True),
       P('Before you start', h2),
       *bullets([
           '<b>Checks must pass today.</b> Nightshift runs them after every task; if they already fail, every task will.',
           '<b>Install dependencies first.</b> Agents have no network, so they cannot install packages.',
-          '<b>Commit your own work.</b> The plan starts from your last commit; uncommitted changes are not included.',
+          '<b>Merge the work it needs.</b> The plan starts from the latest main branch on the remote; unmerged branches and uncommitted changes are not included.',
           '<b>Draft without starting:</b> ' + m('nightshift draft &lt;doc&gt;') + ', look it over, then '
           + m('nightshift start &lt;id&gt;') + '.',
       ])]
@@ -311,7 +311,7 @@ s += [PageBreak(), P('Follow and control a plan', h1),
               'Use the plan id instead of a task id to reopen a blocked plan.'],
              ['limit NAME VALUE --plan ID', 'Raise or lower a limit, for example ' + m('limit tokens 8000000') + '.'],
              ['stop ID / start ID', 'Stop the background runner after its current step, or start it again.'],
-             ['merge ID', 'Your approval: merge the finished branch into the branch you have checked out.'],
+             ['merge ID', 'Your approval: merge the finished branch into the branch it started from (main). Nothing is pushed.'],
              ['discard ID --yes', 'Throw away an unmerged plan: its worktree, its branch, and its folder.']],
             [58 * mm, FULL - 58 * mm], mono_first=True),
       P('What the statuses mean', h2),
@@ -322,8 +322,8 @@ s += [PageBreak(), P('Follow and control a plan', h1),
              ['Ready to merge', 'Every task and the final review passed.', 'Look at the branch, then merge (or discard).'],
              ['Draft', 'Planned, not started.', 'Start it, or discard it.']],
             [30 * mm, 68 * mm, FULL - 98 * mm]),
-      callout('Merging', 'The report prints the exact commands. ' + m('merge') + ' refuses if your repository has '
-              'uncommitted changes or a detached HEAD, and aborts cleanly on a conflict, so it never leaves a half-merged '
+      callout('Merging', 'The report prints the exact commands. ' + m('merge') + ' merges into the branch the plan started from, wherever it is checked out, and refuses if that checkout has '
+              'uncommitted changes. It aborts cleanly on a conflict, so it never leaves a half-merged '
               'tree. The plan branch is kept after merging.')]
 
 # 5 — The app
@@ -347,8 +347,8 @@ s += [PageBreak(), P('The Nightshift app', h1),
              ['Buttons', 'Approve and Start (drafts, with Works / Reviews pickers), Pause / Resume, Stop Turn, Start / Stop Runner, Retry, Open Worktree, '
               'Report, and Approve and Merge (with a confirmation).'],
              ['Plan Studio', 'New Plan (+). Paste your notes, quick and messy, and press Start Interview. Claude finds the project in '
-              'your workspace, reads its code and rules (it cannot change anything), asks multiple-choice questions you answer with a '
-              'click or your own words, and writes the roadmap on the right, where you can edit it. Pick who works and who reviews. '
+              'your workspace, reads its code and rules (it cannot change anything), asks questions one at a time (each choice explained, one marked Recommended; '
+              'click, press 1 to 9, or use your own words), shows where the plan will start (change it with Starts from), lets you Stop a turn, and writes the roadmap on the right, where you can edit it. Pick who works and who reviews. '
               'Save and Draft Plan writes it into the project and drafts the plan; nothing runs until you press Approve and Start.'],
              ['Accounts', 'Cmd-comma. Each provider\'s version, sign-in (a Sign In button opens your browser; subscription only), '
               'an on/off switch, and Run Setup.'],
@@ -423,7 +423,7 @@ s += [PageBreak(), P('Troubleshooting', h1),
               'when it stopped is blocked rather than repeated, so you decide.'],
              ['The Mac restarted', 'Runners do not restart by themselves yet. Run ' + m('list') + ', then ' + m('start ID')
               + ' for each plan you want to continue. (' + m('docs/SERVICE.md') + ' shows how to start at login.)'],
-             ['merge refuses', 'Commit or stash your own changes first, and check out the branch to merge into.'],
+             ['merge refuses', 'The checkout that has the target branch (usually main) has uncommitted changes. Commit or stash them first.'],
              ['The app says it is not set up', 'Run ' + m('nightshift setup') + ' once, then reopen the app.'],
              ['The app will not build', 'Use ' + m('app/build.sh') + ': it uses Xcode\'s toolchain, because the Command '
               'Line Tools\' Swift package tool is broken on this Mac.']],
