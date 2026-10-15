@@ -111,6 +111,7 @@ struct PlanDetail: View {
     var scrolls = true // false only for offscreen snapshots
     @State private var confirmingMerge = false
     @State private var confirmingDelete = false
+    @State private var confirmingSkip = false
     @State private var report: String?
     @State private var draftRoles = AgentRoles()
 
@@ -125,6 +126,16 @@ struct PlanDetail: View {
             Button("Merge into the current branch") { Task { await model.perform(["merge", plan.id], for: plan.id) } }
         } message: {
             Text("This merges the plan's branch into the branch currently checked out in \(plan.repo). The repository must have no uncommitted changes. The plan branch is kept.")
+        }
+        .confirmationDialog("Skip \(plan.blockedTask?.title ?? "this task")?", isPresented: $confirmingSkip) {
+            Button("Skip and Continue") {
+                Task {
+                    if let task = plan.blockedTask { await model.perform(["skip", task.id, "--plan", plan.id], for: plan.id) }
+                    if plan.isPaused { await model.perform(["resume", "--plan", plan.id], for: plan.id) }
+                }
+            }
+        } message: {
+            Text("It counts as done without a change or commit, and the next tasks can run. Use this for steps that are not needed, such as check-only steps.")
         }
         .confirmationDialog("Delete this draft?", isPresented: $confirmingDelete) {
             Button("Delete Draft", role: .destructive) { model.deleteDraft(plan) }
@@ -217,6 +228,10 @@ struct PlanDetail: View {
                 if plan.status == "blocked" || plan.blockedTask != nil {
                     Button { Task { await retry() } } label: { Label("Retry", systemImage: "arrow.clockwise") }
                         .help("After you have looked at the blocker: requeue the blocked work and resume.")
+                }
+                if plan.blockedTask != nil {
+                    Button { confirmingSkip = true } label: { Label("Skip Task", systemImage: "forward") }
+                        .help("Mark the blocked task done without changes, for example a check-only step, and continue.")
                 }
                 openButton
                 Button("Report") { Task { report = await model.output(["report", "--plan", plan.id]) } }
@@ -387,6 +402,8 @@ struct DifficultyRow: View {
                 .fixedSize()
                 .controlSize(.small)
                 .help("Sets how much reasoning effort the worker starts with. Each retry goes one level higher.")
+            } else if task.skipped == true {
+                Text("Skipped by you").font(.caption).foregroundStyle(.secondary)
             } else if let difficulty = task.difficulty {
                 Text("Rated \(difficulty)").font(.caption).foregroundStyle(.secondary)
             }

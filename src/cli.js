@@ -53,6 +53,7 @@ const usage = `Usage: node src/cli.js <command> [options]
   pause | resume               Stop or restart dispatch at the next task boundary
   interrupt                    Stop the running turn now; its task blocks and the queue pauses
   retry <task-id|plan-id>      Requeue a blocked task (or reopen a blocked plan) after you have reconciled it
+  skip <task-id>               Mark a blocked or waiting task done without changes (--plan id)
   limit <name> <value>         Change a plan limit, for example after one was reached
   difficulty <task> <level>    Rate a task low|medium|high (--plan id): sets the worker's starting effort
   effort [set <key> <level>]   Effort bounds and fixed levels: min, max, reviewer, planner (low…max)
@@ -390,6 +391,7 @@ const commands = {
   resume: () => enqueue('resume'),
   interrupt: () => enqueue('interrupt'),
   retry: () => { if (!argument) throw new Error('retry requires a task ID.'); enqueue('retry', { id: argument }); },
+  skip: () => { if (!argument) throw new Error('skip requires a task ID.'); enqueue('skip', { id: argument }); },
   limit: () => {
     const value = positionals[2];
     if (!argument || !value) throw new Error('limit requires a name and a value, for example: limit tokens 8000000');

@@ -29,8 +29,8 @@ struct Plan: Decodable, Identifiable, Hashable {
     let lastEvent: LastEvent?
     let log: String?
 
-    static func == (a: Plan, b: Plan) -> Bool { a.id == b.id }
-    func hash(into hasher: inout Hasher) { hasher.combine(id) }
+    // Equality covers every field (synthesized). An id-only == made SwiftUI skip redraws
+    // when a plan changed, for example from draft to running.
 
     var isPaused: Bool { paused ?? false }
     var doneCount: Int { tasks.filter { $0.status == "done" }.count }
@@ -67,6 +67,7 @@ struct PlanTask: Decodable, Hashable {
     let difficulty: String?
     let difficultyReason: String?
     let effort: String?
+    let skipped: Bool?
 }
 
 struct CurrentTask: Decodable, Hashable {

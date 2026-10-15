@@ -174,7 +174,7 @@ export function summarize(id) {
     finalReview: plan.final?.review?.reason ?? null,
     rules: (plan.rules ?? []).map(r => [r.path, ...(r.also ?? [])].join(' = ')),
     tasks: state.tasks.map(t => ({ id: t.id, title: t.title, status: t.status, attempts: t.attempts, commit: t.commit ?? null, reason: t.reason ?? null,
-      difficulty: t.difficulty ?? null, difficultyReason: plan.tasks?.find(p => p.id === t.id)?.difficultyReason ?? null, effort: t.effort ?? null })),
+      skipped: t.skipped === true, difficulty: t.difficulty ?? null, difficultyReason: plan.tasks?.find(p => p.id === t.id)?.difficultyReason ?? null, effort: t.effort ?? null })),
     effort: plan.effort ?? null,
     limits: { dispatches: [dispatches, plan.limits.dispatches], tokens: [tokens, plan.limits.tokens], hours: [Number(hours.toFixed(2)), plan.limits.hours] },
     lastEvent: last ? { at: last.at, type: last.type } : null,
