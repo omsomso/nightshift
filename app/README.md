@@ -13,8 +13,17 @@ The macOS entry point to Nightshift: a window, a menu-bar icon, and notification
 - **Plans**: every plan in `~/.nightshift/plans` with progress, blockers, limits, project
   rules, and the runner log; Approve and Start, Pause/Resume, Stop Turn, Start/Stop
   Runner, Retry, Open Worktree, Report, and Approve and Merge (with confirmation).
-- **Accounts** (Settings, ⌘,): installed and pinned versions, sign-in status with a Sign In
-  button (subscription only; opens the browser), on/off per provider, and Run Setup.
+- **Plan view**: a colored next-step panel with the buttons that matter now. Ready plans:
+  Review Changes (per-task diffs, verdicts, checks) and Approve (merge locally or open a
+  pull request; the arrow offers the other). Blocked plans: Retry, Fix with Claude (opens
+  Claude in Terminal in the worktree, already briefed; the brief is also on the clipboard),
+  Accept Fix, and More (skip, start or stop the runner). Drafts: Approve and Start, Check
+  Readiness, Edit (tasks, checks, allowed paths), and Add to Queue. Running plans show a
+  live Activity card. Plans waiting at a usage limit say when they continue.
+- **Queue**: queued plans show "Queued #n"; the sidebar's Queue bar starts the queue.
+- **Settings** (⌘,): **Accounts** (versions, sign-ins, on/off, setup, effort); **Runs**
+  (usage limits: wait or stop; sandboxed checks and network; approval: merge or pull
+  request; start runners again at login); **Usage** (tokens per day and per plan).
 - Notifications when a plan newly needs you or is ready to merge.
 
 The app does no orchestration itself: every action runs `node src/cli.js …`, using the
@@ -33,7 +42,9 @@ because the Command Line Tools' `swift-package` on this Mac failed to load (a li
 mismatch). Copy the app to /Applications if you want it in Launchpad. The icon is drawn by
 `app/icon/make_icon.swift`; run `app/icon/make-icns.sh` to rebuild `Resources/AppIcon.icns`.
 
-Development aids: `NIGHTSHIFT_SNAPSHOT=<dir>` renders each plan's view to PNG and quits
+Development aids: `NIGHTSHIFT_OPEN_SHEET=review|edit` opens that sheet for the plan
+selected with `NIGHTSHIFT_SELECT=<id>`; `NIGHTSHIFT_SETTINGS_TAB=runs|usage` with
+`NIGHTSHIFT_OPEN_SETTINGS=1` opens that tab; `NIGHTSHIFT_SNAPSHOT=<dir>` renders each plan's view to PNG and quits
 (native controls appear as placeholders); `NIGHTSHIFT_OPEN_STUDIO=1` opens Plan Studio at
 launch, and `NIGHTSHIFT_STUDIO_DEMO=1` fills it with a sample conversation (`=busy` shows
 the typing state).
@@ -69,3 +80,9 @@ it and when, lines added and removed, flashes on each change, notes it in the ch
 offers Restore Previous; edits you make go to Claude with your next message. Draft,
 ready-to-merge, and Studio views were screenshotted; the blocked and running panels were
 not (no such plan was available).
+2026-10-16 (evening): review sheet, draft editor, Activity card, queue bar, waiting and
+pull-request states, Fix with Claude, Accept Fix, and the Runs and Usage settings tabs were
+screenshotted against fixture plans (ready, blocked, waiting at a usage limit, pull request
+open, queued draft). Not clicked through on screen: Fix with Claude (it opens Terminal and a
+real Claude session), the merge/pull-request confirmations, and saving an edited draft from
+the sheet (the `edit` command behind it is tested).

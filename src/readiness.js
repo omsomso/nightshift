@@ -99,6 +99,7 @@ export async function checkReadiness(repo, { base, ref, branch, checks, checkSou
   const remove = () => {
     tryGit(repo, ['worktree', 'remove', '--force', dir]);
     rmSync(dir, { recursive: true, force: true });
+    rmSync(join(home(), 'checks', 'check-tmp'), { recursive: true, force: true });
     tryGit(repo, ['worktree', 'prune']);
   };
   remove();

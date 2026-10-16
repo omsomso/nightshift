@@ -83,6 +83,8 @@ there is included; unpushed commits, unmerged branches, and uncommitted changes 
 
 ```sh
 nightshift list                       # all plans, status, progress
+nightshift activity <id>              # what the agents did most recently
+nightshift review <id>                # before approving: per-task diffs, verdicts, checks
 nightshift report --plan <id>         # tasks, commits, blockers, limits, usage, merge command
 nightshift logs <id>                  # runner log
 nightshift pause --plan <id>          # resume --plan <id>
@@ -92,11 +94,16 @@ nightshift limit tokens 8000000 --plan <id>
 ```
 
 When a plan is blocked, read the reason from `report` and explain it to the user; do not
-retry or raise limits without their agreement.
+retry or raise limits without their agreement. If the user wants to fix it with you, run
+`nightshift fix-prompt <id>` for the context and work in the directory it names (do not
+commit there); when it is fixed, the user accepts it with `nightshift accept <task> --plan <id>`.
+A plan that says it is waiting for a usage limit continues by itself after the reset.
+`nightshift queue add <id>` lines up plans to run one after another.
 
 ## Finishing
 
-`nightshift merge <id>` is the owner's approval. Never run it, and never run
+`nightshift merge <id>` (or `merge <id> --pr`, which pushes the plan branch and opens a pull
+request) is the owner's approval. Never run it, and never run
 `nightshift discard <id> --yes`, unless the user explicitly asks in this conversation.
 Suggest reviewing the branch first (`report` prints the commands).
 

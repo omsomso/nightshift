@@ -23,7 +23,10 @@ import { listProjects, workspaceRoots } from './projects.js';
 import { spawnSync } from 'node:child_process';
 import { setTaskDifficulty } from './plans.js';
 import { validateEffort, levels } from './effort.js';
-import { createPlan, saveDraft, startPlan, stopRunner, mergePlan, discardPlan, summarize, listPlans } from './plans.js';
+import { createPlan, saveDraft, startPlan, stopRunner, mergePlan, discardPlan, summarize, listPlans, resumeRunners, editDraft, fixPrompt } from './plans.js';
+import { readQueue, enqueuePlan, dequeuePlan, moveInQueue, advanceQueue, isActive } from './queue.js';
+import { autostartStatus, setAutostart } from './autostart.js';
+import { reviewData, activity, usage as usageReport } from './insight.js';
 
 const usage = `Usage: node src/cli.js <command> [options]
 
@@ -49,7 +52,12 @@ const usage = `Usage: node src/cli.js <command> [options]
   logs <id> [--lines n]        Print the last n lines (default 40) of a plan's runner log
   discard <id> --yes           Remove a plan: a draft; an unmerged plan's worktree, branch, and directory;
                                or a merged plan's record (its work stays merged)
-  merge <id>                   Approve: merge a finished plan into the branch it started from (nothing is pushed)
+  merge <id> [--pr | --local]  Approve: merge a finished plan into the branch it started from (nothing is pushed),
+                               or with --pr push its branch and open a pull request (needs gh); mergeStyle sets the default
+  queue [add|remove|up|down <id> | start | clear]
+                               Plans that run one after another; the next starts when one stops for you
+  autostart [on|off]           Start runners again after a restart (a login item); resume-runners does it now
+  settings [set <key> <value>] Run settings: onUsageLimit wait|stop, sandboxChecks, checkNetwork, mergeStyle local|pr
 
   demo [state]                 Seed and run the simulated demo
   status [state]               Print saved state (works while a runner is active)
@@ -62,6 +70,12 @@ const usage = `Usage: node src/cli.js <command> [options]
   interrupt                    Stop the running turn now; its task blocks and the queue pauses
   retry <task-id|plan-id>      Requeue a blocked task (or reopen a blocked plan) after you have reconciled it
   skip <task-id>               Mark a blocked or waiting task done without changes (--plan id)
+  accept <task-id>             Take the owner's own fix in the worktree for a blocked task: checks, then commit (--plan id)
+  fix-prompt <id> [--json]     Where and what to tell an interactive Claude session that helps fix a stopped plan
+  review <id> [--json]         Before approving: each task's diff, review verdict, and checks; the whole plan's diff
+  activity <id> [--lines n]    What the agents did most recently (tools, files, checks, reviews) [--json]
+  usage [days] [--json]        Tokens and turns per plan and per day (default 14 days)
+  edit <draft> --file f.json   Change a draft before approving: brief, checks, allowedPaths, tasks (add, remove, reorder)
   limit <name> <value>         Change a plan limit, for example after one was reached
   difficulty <task> <level>    Rate a task low|medium|high (--plan id): sets the worker's starting effort
   effort [set <key> <level>]   Effort bounds and fixed levels: min, max, reviewer, planner (low…max)
@@ -76,7 +90,7 @@ const { values, positionals } = parseArgs({ allowPositionals: true, options: {
   id: { type: 'string' }, title: { type: 'string' }, acceptance: { type: 'string' }, after: { type: 'string' },
   'max-attempts': { type: 'string', default: '2' }, since: { type: 'string' }, help: { type: 'boolean' },
   plan: { type: 'string' }, 'no-fetch': { type: 'boolean' }, message: { type: 'string' }, session: { type: 'string' }, notes: { type: 'boolean' }, cwd: { type: 'string' }, 'with-rules': { type: 'boolean' }, steps: { type: 'string' }, request: { type: 'string' }, yes: { type: 'boolean' }, json: { type: 'boolean' },
-  lines: { type: 'string', default: '40' }, base: { type: 'string' }, check: { type: 'string', multiple: true }, 'no-run': { type: 'boolean' }
+  lines: { type: 'string', default: '40' }, base: { type: 'string' }, pr: { type: 'boolean' }, local: { type: 'boolean' }, file: { type: 'string' }, task: { type: 'string' }, check: { type: 'string', multiple: true }, 'no-run': { type: 'boolean' }
 } });
 const [command = 'status', argument] = positionals;
 // demo and status also accept the state directory positionally, as in earlier versions.
@@ -141,6 +155,7 @@ async function serve() {
       try { supervisor.applyCommands(); } catch (error) { failure = error; stopping = true; wake(); }
     }, 1000);
     let dispatched = 0;
+    let advanced = false;
     while (!stopping) {
       if (await supervisor.tick()) {
         dispatched += 1;
@@ -151,6 +166,18 @@ async function serve() {
           dispatched = 0;
         }
         continue;
+      }
+      // The plan stopped for the owner: let the next queued plan run (once per stop).
+      if (plan) {
+        const active = isActive(supervisor.state);
+        if (!active && !advanced) {
+          advanced = true;
+          try {
+            const next = await advanceQueue(startPlan, { except: plan.id });
+            if (next) supervisor.record(null, 'queue-advanced', `Started the next queued plan: ${next}`), store.save(supervisor.state);
+          } catch (error) { console.error(`Could not start the next queued plan: ${error.message}`); }
+        }
+        if (active) advanced = false;
       }
       // Idle wait; a stop signal or a lost lease ends it at once.
       await new Promise(done => {
@@ -280,7 +307,7 @@ async function start(id = argument) {
 
 function list() {
   const plans = listPlans();
-  if (values.json) return console.log(JSON.stringify({ home: home(), plans }));
+  if (values.json) return console.log(JSON.stringify({ home: home(), plans, queue: readQueue(), autostart: autostartStatus().enabled, settings: runSettings() }));
   if (!plans.length) return console.log('No plans yet. Draft one with: node src/cli.js run docs/PLAN.md');
   for (const p of plans) {
     const done = p.tasks.filter(t => t.status === 'done').length;
@@ -419,6 +446,52 @@ async function check() {
   }
 }
 
+// Run settings shared by the CLI and the app (stored in ~/.nightshift/config.json).
+const settingKeys = {
+  onUsageLimit: ['wait', 'stop'], sandboxChecks: ['true', 'false'], checkNetwork: ['true', 'false'], mergeStyle: ['local', 'pr']
+};
+function runSettings(config = readConfig()) {
+  return { onUsageLimit: config.onUsageLimit ?? 'wait', sandboxChecks: config.sandboxChecks !== false, checkNetwork: config.checkNetwork === true,
+    mergeStyle: config.mergeStyle ?? 'local', autostart: autostartStatus().enabled };
+}
+function settings() {
+  const [, action, key, value] = positionals;
+  if (action === 'set') {
+    if (!settingKeys[key]) throw new Error(`Unknown setting ${key}. Settings: ${Object.keys(settingKeys).join(', ')}.`);
+    if (!settingKeys[key].includes(value)) throw new Error(`${key} must be one of: ${settingKeys[key].join(', ')}.`);
+    const config = readConfig();
+    config[key] = value === 'true' ? true : value === 'false' ? false : value;
+    writeConfig(config);
+  } else if (action) throw new Error('Use: settings [set <key> <value>]');
+  const current = runSettings();
+  if (values.json) return console.log(JSON.stringify(current));
+  for (const [k, v] of Object.entries(current)) console.log(`${k.padEnd(14)} ${v}`);
+}
+
+async function queue() {
+  const [, action, id] = positionals;
+  if (['add', 'remove', 'up', 'down'].includes(action) && !id) throw new Error(`queue ${action} requires a plan id.`);
+  if (action === 'add') await enqueuePlan(id);
+  else if (action === 'remove') await dequeuePlan(id);
+  else if (action === 'up' || action === 'down') await moveInQueue(id, action === 'up' ? -1 : 1);
+  else if (action === 'clear') for (const queued of readQueue()) await dequeuePlan(queued);
+  else if (action === 'start') {
+    const next = await advanceQueue(startPlan);
+    if (!values.json) console.log(next ? `Started ${next}.` : readQueue().length ? 'A plan is still working; the queue continues when it stops.' : 'The queue is empty.');
+  } else if (action) throw new Error('Use: queue [add|remove|up|down <id> | start | clear]');
+  const plans = readQueue();
+  if (values.json) return console.log(JSON.stringify({ queue: plans }));
+  if (action !== 'start') console.log(plans.length ? plans.map((p, i) => `${i + 1}. ${p}`).join('\n') : 'The queue is empty.');
+}
+
+function autostart() {
+  const [, action] = positionals;
+  if (action && !['on', 'off'].includes(action)) throw new Error('Use: autostart [on|off]');
+  const status = action ? setAutostart(action === 'on') : autostartStatus();
+  if (values.json) return console.log(JSON.stringify(status));
+  console.log(status.enabled ? `On: runners that were on start again at login (${status.plist}).` : 'Off: after a restart, start runners yourself (or turn this on).');
+}
+
 function projects() {
   const list = listProjects();
   if (values.json) return console.log(JSON.stringify({ workspaces: workspaceRoots(), projects: list }));
@@ -439,7 +512,8 @@ function workspaces() {
 }
 
 const commands = {
-  demo, serve, add, plan, setup, draft, run, list, providers, login, chat, projects, workspaces, effort, branches, check,
+  demo, serve, add, plan, setup, draft, run, list, providers, login, chat, projects, workspaces, effort, branches, check, settings, queue, autostart,
+  'resume-runners': async () => { const started = await resumeRunners(); console.log(started.length ? `Started: ${started.join(', ')}` : 'Nothing to start.'); },
   difficulty: () => {
     if (!values.plan || !argument || !positionals[2]) throw new Error('Use: difficulty <task-id> <low|medium|high> --plan <id>');
     console.log(setTaskDifficulty(values.plan, argument, positionals[2]) === 'queued' ? 'Queued: applies from the task\'s next attempt.' : 'Draft updated.');
@@ -450,7 +524,11 @@ const commands = {
   stop: async () => { if (!argument) throw new Error('stop requires a plan id.'); console.log(await stopRunner(argument) ? 'Stopped.' : 'Not running.'); },
   merge: async () => {
     if (!argument) throw new Error('merge requires a plan id.');
-    const merged = await mergePlan(argument);
+    if (values.pr || readConfig().mergeStyle === 'pr' && !values.local) {
+      const opened = await mergePlan(argument, { style: 'pr' });
+      return console.log(`Pushed ${opened.branch} and opened a pull request into ${opened.base}: ${opened.url}`);
+    }
+    const merged = await mergePlan(argument, { style: 'local' });
     console.log(`Merged ${merged.branch} into ${merged.target} as ${merged.merged.slice(0, 12)}. The worktree was removed; the branch is kept.`);
   },
   status: () => console.log(JSON.stringify(Store.inspect(directory), null, 2)),
@@ -466,6 +544,47 @@ const commands = {
   interrupt: () => enqueue('interrupt'),
   retry: () => { if (!argument) throw new Error('retry requires a task ID.'); enqueue('retry', { id: argument }); },
   skip: () => { if (!argument) throw new Error('skip requires a task ID.'); enqueue('skip', { id: argument }); },
+  accept: () => { if (!argument) throw new Error('accept requires the blocked task\'s ID.'); enqueue('accept', { id: argument }); },
+  edit: () => {
+    if (!argument || !values.file) throw new Error('Use: edit <draft-id> --file changes.json (brief, checks, allowedPaths, tasks)');
+    const plan = editDraft(argument, JSON.parse(readFileSync(resolve(values.file), 'utf8')));
+    if (values.json) return console.log(JSON.stringify(plan));
+    console.log(`Draft ${argument} updated: ${plan.tasks.length} tasks, checks: ${plan.checks.join('; ')}`);
+  },
+  review: () => {
+    if (!argument) throw new Error('review requires a plan id.');
+    const data = reviewData(argument);
+    if (values.json) return console.log(JSON.stringify(data));
+    console.log(`${data.id}: ${data.branch} from ${data.base}${data.final ? ` (${data.final.stat})` : ''}`);
+    for (const task of data.tasks) {
+      console.log(`\n${task.status === 'done' ? '✓' : '·'} ${task.title}${task.commit ? ` [${task.commit.slice(0, 8)}]` : ''}${task.ownerFixed ? ' (fixed by you)' : task.skipped ? ' (skipped)' : ''}`);
+      if (task.review) console.log(`  review: ${task.review.reason.replace(/\s+/g, ' ').slice(0, 300)}`);
+      if (task.stat) console.log(task.stat.split('\n').map(l => `  ${l}`).join('\n'));
+    }
+    if (data.final?.review) console.log(`\nFinal review: ${data.final.review.reason}`);
+    console.log(`\nFull diffs: nightshift review ${data.id} --json, or git diff ${data.baseCommit.slice(0, 12)} ${data.branch}`);
+  },
+  activity: () => {
+    if (!argument) throw new Error('activity requires a plan id.');
+    const data = activity(argument, { limit: Number(values.lines) || 40 });
+    if (values.json) return console.log(JSON.stringify(data));
+    for (const line of data.lines) console.log(`${line.at.slice(11, 19)}  ${line.text}`);
+    if (data.waitUntil) console.log(`Waiting for the usage limit to reset (until ${data.waitUntil}).`);
+  },
+  usage: () => {
+    const data = usageReport({ days: Number(positionals[1]) || 14 });
+    if (values.json) return console.log(JSON.stringify(data));
+    const k = n => n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(n);
+    for (const day of data.days) console.log(`${day.day}  ${k(day.input + day.output).padStart(6)} tokens  ${String(day.turns).padStart(4)} turns  ${day.plans.join(', ')}`);
+    for (const plan of data.plans) console.log(`${plan.id.padEnd(28)} ${k(plan.input + plan.output).padStart(6)} tokens  ${plan.turns} turns  ${plan.dispatches} attempts${plan.hours !== undefined ? `  ${plan.hours} h` : ''}`);
+    console.log(`Total: ${k(data.total.input + data.total.output)} tokens in ${data.total.turns} turns (on your subscription; Claude reports about US$${data.total.costUsd.toFixed(2)} at API prices, which you are not charged)`);
+  },
+  'fix-prompt': () => {
+    if (!argument) throw new Error('fix-prompt requires a plan id.');
+    const fix = fixPrompt(argument);
+    if (values.json) return console.log(JSON.stringify(fix));
+    console.log(`cd ${fix.cwd}\n\n${fix.prompt}`);
+  },
   limit: () => {
     const value = positionals[2];
     if (!argument || !value) throw new Error('limit requires a name and a value, for example: limit tokens 8000000');

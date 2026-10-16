@@ -3,6 +3,8 @@ import { createHash } from 'node:crypto';
 import { existsSync, realpathSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { protectedPaths } from './plan.js';
+import { checkCommand, sandboxHint } from './sandbox.js';
+import { dirname } from 'node:path';
 
 const reviewDiffChars = 60_000;
 const checkOutputChars = 8_000;
@@ -48,27 +50,30 @@ export class Workspace {
   }
 
   // Deterministic gates run before any review. `block` stops the task; `repair` asks the worker to fix it.
-  gate(change) {
-    if (!change.files.length) return { verdict: 'block', reason: 'Stagnation: the attempt changed no files.' };
+  // The owner's own fix may go outside the allowed paths (never into protected ones).
+  gate(change, { owner = false } = {}) {
+    if (!change.files.length) return { verdict: 'block', reason: owner ? 'There are no changes in the worktree to accept.' : 'Stagnation: the attempt changed no files.' };
     const isProtected = path => protectedPaths.some(p => p.endsWith('/') ? path.startsWith(p) : path === p || path.startsWith(`${p}/`));
     const blockedPaths = change.files.map(f => f.path).filter(isProtected);
     if (blockedPaths.length) return { verdict: 'block', reason: `Drift: protected paths changed: ${blockedPaths.join(', ')}.` };
-    const outside = change.files.map(f => f.path).filter(path => !this.allowedPaths.some(prefix => path.startsWith(prefix)));
+    const outside = owner ? [] : change.files.map(f => f.path).filter(path => !this.allowedPaths.some(prefix => path.startsWith(prefix)));
     if (outside.length) return { verdict: 'block', reason: `Drift: changes outside the plan's allowed paths: ${outside.join(', ')}.` };
-    if (change.changedLines > this.limits.changedLinesPerTask) {
+    if (!owner && change.changedLines > this.limits.changedLinesPerTask) {
       return { verdict: 'repair', reason: `The change is ${change.changedLines} lines, over this plan's cap of ${this.limits.changedLinesPerTask}. Make a smaller change that still meets the task.` };
     }
     return { verdict: 'ok' };
   }
 
-  // Runs the plan's checks in the worktree, one at a time, each with a timeout.
+  // Runs the plan's checks in the worktree, one at a time, each with a timeout, inside the
+  // check sandbox unless the owner turned it off (src/sandbox.js).
   async runChecks({ signal, onCheck } = {}) {
     const results = [];
     for (const [index, command] of this.checks.entries()) {
       onCheck?.({ index, total: this.checks.length, command });
       const started = Date.now();
+      const run = checkCommand(command, { worktree: this.worktree, tmpRoot: join(dirname(this.worktree), 'check-tmp') });
       const result = await new Promise(resolve => {
-        const child = spawn('/bin/sh', ['-c', command], { cwd: this.worktree, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
+        const child = spawn(run.file, run.args, { cwd: this.worktree, env: run.env, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
         let output = '';
         let timedOut = false;
         const collect = chunk => { output = tail(output + chunk, checkOutputChars * 4); };
@@ -81,7 +86,8 @@ export class Workspace {
         child.on('close', code => {
           clearTimeout(timer);
           signal?.removeEventListener('abort', kill);
-          resolve({ command, exitCode: timedOut ? null : code, timedOut, durationMs: Date.now() - started, output: tail(output, checkOutputChars) });
+          const hint = code !== 0 && run.sandboxed ? sandboxHint(output) : '';
+          resolve({ command, exitCode: timedOut ? null : code, timedOut, durationMs: Date.now() - started, sandboxed: run.sandboxed, output: tail(output, checkOutputChars) + hint });
         });
       });
       results.push(result);

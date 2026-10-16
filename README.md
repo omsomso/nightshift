@@ -106,6 +106,24 @@ app/build.sh
 open app/build/Nightshift.app
 ```
 
+## Overnight and morning
+
+Options live in the app's Settings › Runs (or `nightshift settings`); everything is also a
+command:
+
+| What | How |
+| --- | --- |
+| Usage limits | When Claude or Codex reports its subscription limit, the plan waits for the reset and continues; the interrupted attempt does not count. `settings set onUsageLimit stop` pauses instead. |
+| Sandboxed checks | Project checks run under macOS's sandbox: writes only inside the worktree, temp folders, and tool caches; no network. `settings set sandboxChecks false` / `checkNetwork true` relax it. |
+| Queue | `queue add <id>` lines up plans (drafts included); `queue start` runs the first; each next one starts when the one before stops for you (ready, blocked, or paused). |
+| After a restart | `autostart on` adds a login item that restarts runners that were on; ones you stopped stay stopped. `resume-runners` does it now. |
+| Edit a draft | `edit <draft> --file changes.json`: brief, checks, allowed paths, and tasks (reword, reorder, remove, add). |
+| Review | `review <id>`: each task's diff, review verdict, and checks; the whole plan's diff and final review. |
+| Live activity | `activity <id>`: what the agents did most recently (tools and files, checks, reviews, commits). |
+| Fix it yourself | `fix-prompt <id>` gives an interactive Claude session the context (the app's Fix with Claude opens it in Terminal); `accept <task> --plan <id>` then checks your fix and commits it as the task. |
+| Pull request | `merge <id> --pr` pushes the plan branch and opens a pull request into the starting branch with `gh`; `settings set mergeStyle pr` makes it the default. |
+| Usage | `usage`: tokens and turns per plan and per day. |
+
 ## Try it offline
 
 Requires Node.js 22.13 or newer (for built-in SQLite). No dependency installation is needed.
@@ -159,7 +177,7 @@ for you to merge. See `docs/EDIT_MODE.md`.
 - `docs/ROADMAP.md`: ordered implementation backlog and next-agent handoff.
 - `src/supervisor.js`: queue and verification state machine.
 - `src/store.js`: SQLite state, append-only events, runner lease, and command queue.
-- `src/cli.js`: plan commands (setup, run, draft, start, stop, list, logs, discard, merge) and service commands (serve, add, pause, resume, retry, limit, report).
+- `src/cli.js`: plan commands (setup, run, draft, check, edit, start, stop, list, logs, review, activity, discard, merge, queue, settings, autostart, usage) and service commands (serve, add, pause, resume, retry, accept, skip, limit, report).
 - `src/report.js`: morning report rendering.
 - `src/plan.js`, `src/workspace.js`: edit-mode plans, worktrees, checks, gates, and commits.
 - `src/planner.js`, `src/plans.js`, `src/home.js`: drafting from documents, plan lifecycle, `~/.nightshift`.
@@ -179,6 +197,10 @@ for you to merge. See `docs/EDIT_MODE.md`.
 - `test/edit.test.js`: edit-mode cycle, gates, limits, final review, and serve end to end.
 - `src/base.js`: where a plan starts (fetched default branch, `--base`), branch listing, and planning snapshots.
 - `src/readiness.js`: `check`: work a plan would leave out, known or detected checks, and a check run at the start commit.
+- `src/limits.js`: reading usage-limit reset times from Claude and Codex messages.
+- `src/sandbox.js`: the macOS sandbox profile for project checks.
+- `src/queue.js`, `src/autostart.js`: plans run one after another; the login item that restarts runners.
+- `src/insight.js`: `review`, `activity`, and `usage` views over a plan's record.
 - `test/run.test.js`: setup pins, draft → background run → merge, `--base`, starting from a remote that is ahead, and runner stop.
 - `test/cli.test.js`: `logs`, `discard`, limit names, `list` now line, report task detail, and `report --json`.
 - `test/codex.test.js`, `test/claude.test.js`: subprocess protocol and persisted session tests.

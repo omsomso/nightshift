@@ -1,4 +1,5 @@
-import { BlockedError, BillingGuardError } from '../supervisor.js';
+import { BlockedError, BillingGuardError, UsageLimitError } from '../supervisor.js';
+import { parseUsageLimit } from '../limits.js';
 import { RpcClient } from './rpc-client.js';
 import { codexEffort } from '../effort.js';
 
@@ -132,7 +133,7 @@ export class CodexSession {
           // Codex reports tokens, not cost: usage draws on the ChatGPT plan.
           if (requests) emit({ type: 'usage', threadId, turnId, requests, tokens: { ...tokens }, threadTotal });
           emit({ type: 'turn-completed', threadId, turnId, status: p.turn.status });
-          if (p.turn.status !== 'completed') throw new Error(`Codex turn ${p.turn.status}: ${p.turn.error?.message ?? 'no result'}`);
+          if (p.turn.status !== 'completed') throw codexFailure(p.turn.error, `Codex turn ${p.turn.status}`);
           const result = JSON.parse(finalText);
           if (!result || typeof result !== 'object' || Array.isArray(result)) throw new Error('Final output is not a JSON object.');
           finished = true;
@@ -140,7 +141,7 @@ export class CodexSession {
         } else if (message.method === 'error') {
           flush();
           emit({ type: 'provider-error', threadId, turnId, message: p.error?.message ?? 'Provider error', willRetry: p.willRetry === true });
-          if (!p.willRetry) throw new Error(p.error?.message ?? 'Codex turn failed.');
+          if (!p.willRetry) throw codexFailure(p.error, 'Codex turn failed');
         }
       } catch (error) { fail(error); }
     };
@@ -184,4 +185,13 @@ export class CodexSession {
       client.removeListener('fatal', fail);
     }
   }
+}
+
+// A usage limit (by error code or wording) becomes UsageLimitError, so the plan waits for the reset.
+function codexFailure(error, prefix) {
+  const message = error?.message ?? '';
+  const info = JSON.stringify(error?.codexErrorInfo ?? '');
+  const limit = parseUsageLimit(message) ?? (/usageLimit/i.test(info) ? parseUsageLimit(`usage limit reached ${message}`) : null);
+  if (limit) return new UsageLimitError(`Codex reached its usage limit${limit.known ? '' : ' (reset time not reported)'}.`, limit.resetsAt);
+  return new Error(`${prefix}: ${message || 'no result'}`);
 }

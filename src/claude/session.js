@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { BlockedError, BillingGuardError } from '../supervisor.js';
+import { BlockedError, BillingGuardError, UsageLimitError } from '../supervisor.js';
+import { parseUsageLimit, resetFromEvent } from '../limits.js';
 import { JsonlDecoder } from '../jsonl.js';
 
 // Subscription-only billing. Every ANTHROPIC_* variable (API key, auth token, base URL,
@@ -45,6 +46,13 @@ export function claudeArgs({ sessionId, resume, outputSchema, model, maxBudgetUs
     ...(effort ? ['--effort', effort] : []),
     ...(model ? ['--model', model] : []),
     ...(maxBudgetUsd ? ['--max-budget-usd', String(maxBudgetUsd)] : [])];
+}
+
+// What a tool call touches, for the live activity view: a path, pattern, or command.
+export function toolTarget(input) {
+  if (!input || typeof input !== 'object') return undefined;
+  const value = input.file_path ?? input.path ?? input.notebook_path ?? input.pattern ?? input.command ?? input.url;
+  return typeof value === 'string' ? value.replace(/\s+/g, ' ').slice(0, 160) : undefined;
 }
 
 // One headless `claude -p` process per turn. The prompt goes over stdin, never argv.
@@ -127,12 +135,18 @@ export class ClaudeSession {
         permissionMode: message.permissionMode, authSource: message.apiKeySource });
       return null;
     }
+    // Newer CLIs announce limits as their own message; the result that follows is the failure.
+    if (message.type === 'rate_limit_event') {
+      const info = message.rate_limit_info ?? {};
+      if (info.status === 'rejected') turn.limit = resetFromEvent(info.resetsAt) ?? parseUsageLimit('usage limit reached');
+      return null;
+    }
     if (message.session_id !== sessionId) return null;
     if (!turn.turnId && message.type === 'result') throw new Error('Claude finished before reporting its session; outcome is uncertain.');
     if (message.type === 'assistant') {
       for (const block of message.message?.content ?? []) {
         if (block.type === 'text') emit({ type: 'output', threadId: sessionId, turnId: turn.turnId, text: block.text ?? '' });
-        if (block.type === 'tool_use') emit({ type: 'tool-activity', threadId: sessionId, turnId: turn.turnId, tool: block.name, toolUseId: block.id });
+        if (block.type === 'tool_use') emit({ type: 'tool-activity', threadId: sessionId, turnId: turn.turnId, tool: block.name, toolUseId: block.id, target: toolTarget(block.input) });
       }
       return null;
     }
@@ -163,7 +177,12 @@ export class ClaudeSession {
     if (blocking.length) {
       throw new BlockedError(`Provider request requires human handling: denied ${blocking.map(d => d.tool_name).join(', ')}`);
     }
-    if (status !== 'completed') throw new Error(`Claude turn ${status}: ${message.errors?.join('; ') || message.result || 'no result'}`);
+    if (status !== 'completed') {
+      const text = `${message.errors?.join('; ') ?? ''} ${message.result ?? ''}`;
+      const limit = turn.limit ?? parseUsageLimit(text);
+      if (limit) throw new UsageLimitError(`Claude reached its usage limit${limit.known ? '' : ' (reset time not reported)'}.`, limit.resetsAt);
+      throw new Error(`Claude turn ${status}: ${message.errors?.join('; ') || message.result || 'no result'}`);
+    }
     if (!turn.structured) return { value: String(message.result ?? '') };
     let result = message.structured_output;
     if (result === undefined) {

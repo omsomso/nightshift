@@ -18,6 +18,7 @@ struct ContentView: View {
                 }
             }
             .onDeleteCommand { model.pendingDelete = model.selectedPlan }
+            .safeAreaInset(edge: .bottom) { QueueBar() }
             .navigationSplitViewColumnWidth(min: 240, ideal: 280)
             .onAppear {
                 // Development aid: NIGHTSHIFT_OPEN_STUDIO=1 opens Plan Studio at launch.
@@ -74,7 +75,7 @@ struct PlanRow: View {
             StatusIcon(plan: plan)
             VStack(alignment: .leading, spacing: 2) {
                 Text(plan.id).font(.headline)
-                Text(plan.headline).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                Text(plan.queued.map { "Queued #\($0) · " } ?? "").font(.caption).foregroundStyle(Color.accentColor) + Text(plan.headline).font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
             if plan.status != "draft" {
@@ -94,9 +95,11 @@ struct StatusIcon: View {
             case "draft": return ("doc.text", .secondary)
             case "awaiting-approval": return ("checkmark.seal.fill", .green)
             case "merged": return ("arrow.triangle.merge", .secondary)
+            case "pr-open": return ("arrow.triangle.pull", .purple)
             case "blocked": return ("exclamationmark.octagon.fill", .red)
             default:
                 if plan.blockedTask != nil { return ("exclamationmark.octagon.fill", .red) }
+                if plan.isWaitingForLimit { return ("hourglass", .orange) }
                 if plan.isPaused { return ("pause.circle.fill", .orange) }
                 return plan.runner ? ("play.circle.fill", .blue) : ("stop.circle", .secondary)
             }
@@ -134,6 +137,10 @@ struct PlanDetail: View {
     @State private var checkError: String?
     @State private var checkProcess = ProcessBox()
     @State private var showLog = false
+    @State private var reviewing = false
+    @State private var editing = false
+    @State private var confirmingAccept = false
+    @State private var confirmingPR = false
 
     private var busy: Bool { model.busy.contains(plan.id) }
 
@@ -157,7 +164,27 @@ struct PlanDetail: View {
         } message: {
             Text("It counts as done without a change or commit, and the next tasks can run. Use this for steps that are not needed, such as check-only steps.")
         }
+        .confirmationDialog("Open a pull request for \(plan.branch ?? plan.id)?", isPresented: $confirmingPR) {
+            Button("Push and Open Pull Request") { Task { await model.perform(["merge", plan.id, "--pr"], for: plan.id) } }
+        } message: {
+            Text("Nightshift pushes the plan's branch to origin and opens a pull request into \(plan.baseBranch ?? "the branch it started from") with the GitHub CLI. Nothing else is pushed, and nothing is merged.")
+        }
+        .confirmationDialog("Accept your fix for \(plan.blockedTask?.title ?? "this task")?", isPresented: $confirmingAccept) {
+            Button("Check and Commit My Fix") { Task { await model.acceptFix(plan) } }
+        } message: {
+            Text("Nightshift runs the checks on what is now in the plan's worktree. If they pass, it commits that as this task and continues; if not, the task stays blocked with the output.")
+        }
+        .sheet(isPresented: $reviewing) { ReviewView(plan: plan, approve: plan.status == "awaiting-approval" ? { approve() } : nil).environment(model) }
+        .sheet(isPresented: $editing) { EditDraftView(plan: plan).environment(model) }
         .onChange(of: plan.id) { _, _ in readiness = nil; checkError = nil }
+        .onAppear {
+            // Development aid: NIGHTSHIFT_OPEN_SHEET=review|edit opens that sheet for the selected plan.
+            switch ProcessInfo.processInfo.environment["NIGHTSHIFT_OPEN_SHEET"] {
+            case "review": reviewing = true
+            case "edit": editing = true
+            default: break
+            }
+        }
     }
 
     var content: some View {
@@ -166,6 +193,7 @@ struct PlanDetail: View {
             NextStepPanel(step: nextStep) { nextStepControls }
                 .disabled(busy)
             if plan.status == "draft" { beforeYouStart }
+            if plan.status == "running" || plan.status == "blocked" { ActivityCard(plan: plan) }
             overview
             tasks
             if let limits = plan.limits, plan.status != "draft" {
@@ -205,6 +233,9 @@ struct PlanDetail: View {
             Menu {
                 Button { openWorktree() } label: { Label("Open Worktree", systemImage: "folder") }.disabled(plan.worktree == nil)
                 Button { NSWorkspace.shared.open(URL(fileURLWithPath: plan.repo)) } label: { Label("Open Repository", systemImage: "externaldrive") }
+                if plan.hasCommits { Button { reviewing = true } label: { Label("Review Changes", systemImage: "doc.text.magnifyingglass") } }
+                if plan.status == "draft" { Button { editing = true } label: { Label("Edit Draft…", systemImage: "pencil") } }
+                if let url = plan.pullRequest.flatMap(URL.init(string:)) { Button { NSWorkspace.shared.open(url) } label: { Label("Open Pull Request", systemImage: "arrow.up.right.square") } }
                 if plan.status != "draft" {
                     Button { Task { report = await model.output(["report", "--plan", plan.id]) } } label: { Label("Show Report", systemImage: "doc.text") }
                 }
@@ -233,10 +264,18 @@ struct PlanDetail: View {
         case "merged":
             return NextStep(title: "Merged into \(plan.baseBranch ?? "its branch")", symbol: "arrow.triangle.merge", tint: .secondary,
                             text: "Done. Nothing was pushed; push \(plan.baseBranch ?? "the branch") yourself when you are ready.")
+        case "pr-open":
+            return NextStep(title: "Pull request open", symbol: "arrow.triangle.pull", tint: .purple,
+                            text: "The branch was pushed and a pull request into \(plan.baseBranch ?? "its base branch") is waiting on GitHub\(plan.pullRequest.map { ": \($0)" } ?? ".") Merge it there.")
         default:
             if plan.status == "blocked" || plan.blockedTask != nil {
                 return NextStep(title: "Needs you", symbol: "exclamationmark.octagon.fill", tint: .red,
                                 text: plan.blocker ?? plan.blockedTask?.reason ?? "A task is blocked.")
+            }
+            if plan.isWaitingForLimit {
+                let when = plan.waitUntilDate.map { $0.formatted(date: Calendar.current.isDateInToday($0) ? .omitted : .abbreviated, time: .shortened) } ?? "the reset"
+                return NextStep(title: "Waiting for the usage limit", symbol: "hourglass", tint: .orange,
+                                text: "The subscription's usage limit was reached. Nightshift continues by itself at \(when); the interrupted attempt does not count.")
             }
             if plan.isPaused {
                 return NextStep(title: "Paused", symbol: "pause.circle.fill", tint: .orange,
@@ -267,17 +306,39 @@ struct PlanDetail: View {
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
                 checkButton
+                Button { editing = true } label: { Label("Edit", systemImage: "pencil") }
+                    .help("Reword, reorder, remove, or add tasks; change the checks and allowed paths.")
+                queueButton
             }
         case "awaiting-approval":
             HStack(spacing: 10) {
-                Button { confirmingMerge = true } label: { Label("Approve and Merge", systemImage: "arrow.triangle.merge").padding(.horizontal, 6) }
+                Button { reviewing = true } label: { Label("Review Changes", systemImage: "doc.text.magnifyingglass").padding(.horizontal, 6) }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.large)
-                Button { openWorktree() } label: { Label("Open Worktree", systemImage: "folder") }.disabled(plan.worktree == nil)
-                reportButton
+                Menu {
+                    Button("Merge into \(plan.baseBranch ?? "the starting branch") on this Mac…") { confirmingMerge = true }
+                    Button("Push and open a pull request…") { confirmingPR = true }
+                } label: {
+                    Label(prDefault ? "Approve: Open Pull Request" : "Approve: Merge", systemImage: prDefault ? "arrow.triangle.pull" : "arrow.triangle.merge")
+                } primaryAction: { approve() }
+                .menuStyle(.button)
+                .fixedSize()
+                .controlSize(.large)
+                .help("The default is set in Settings › Runs; the arrow offers the other way.")
             }
         case "merged":
-            reportButton
+            HStack(spacing: 10) {
+                Button { reviewing = true } label: { Label("Review Changes", systemImage: "doc.text.magnifyingglass") }
+                reportButton
+            }
+        case "pr-open":
+            HStack(spacing: 10) {
+                if let url = plan.pullRequest.flatMap(URL.init(string:)) {
+                    Button { NSWorkspace.shared.open(url) } label: { Label("Open Pull Request", systemImage: "arrow.up.right.square").padding(.horizontal, 6) }
+                        .buttonStyle(.borderedProminent).controlSize(.large)
+                }
+                Button { reviewing = true } label: { Label("Review Changes", systemImage: "doc.text.magnifyingglass") }
+            }
         default:
             HStack(spacing: 10) {
                 if plan.status == "blocked" || plan.blockedTask != nil {
@@ -285,13 +346,28 @@ struct PlanDetail: View {
                         .buttonStyle(.borderedProminent)
                         .controlSize(.large)
                         .help("After you have looked at the blocker: requeue the blocked work and resume.")
+                    Button { Task { await model.fixWithClaude(plan) } } label: { Label("Fix with Claude", systemImage: "terminal") }
+                        .help("Opens Claude in Terminal, in the plan's worktree, already told what went wrong. The instructions are also on your clipboard.")
                     if plan.blockedTask != nil {
-                        Button { confirmingSkip = true } label: { Label("Skip Task", systemImage: "forward") }
-                            .help("Mark the blocked task done without changes, for example a check-only step, and continue.")
+                        Button { confirmingAccept = true } label: { Label("Accept Fix", systemImage: "checkmark.circle") }
+                            .help("After fixing it yourself (or with Claude) in the worktree: Nightshift checks it and commits it as this task.")
                     }
-                    if !plan.runner { startRunnerButton(prominent: false) }
+                    Menu("More") {
+                        if plan.blockedTask != nil {
+                            Button("Skip This Task…") { confirmingSkip = true }
+                        }
+                        if plan.runner {
+                            Button("Stop Runner") { Task { await model.perform(["stop", plan.id], for: plan.id) } }
+                        } else {
+                            Button("Start Runner") { Task { await model.perform(["start", plan.id], for: plan.id) } }
+                        }
+                    }
+                    .fixedSize()
                 } else if !plan.runner {
                     startRunnerButton(prominent: true)
+                } else if plan.isWaitingForLimit {
+                    Button { Task { await model.perform(["resume", "--plan", plan.id], for: plan.id) } } label: { Label("Try Now", systemImage: "play.fill") }
+                        .help("Continue now instead of waiting; if the limit has not reset, the plan waits again.")
                 } else if plan.isPaused {
                     Button { Task { await model.perform(["resume", "--plan", plan.id], for: plan.id) } } label: { Label("Resume", systemImage: "play.fill").padding(.horizontal, 6) }
                         .buttonStyle(.borderedProminent)
@@ -304,12 +380,32 @@ struct PlanDetail: View {
                             .help("Stop the running turn now. Its task blocks and the plan pauses.")
                     }
                 }
-                if plan.runner {
+                if plan.runner && !(plan.status == "blocked" || plan.blockedTask != nil) {
                     Button { Task { await model.perform(["stop", plan.id], for: plan.id) } } label: { Label("Stop Runner", systemImage: "power") }
                         .help("Stop the background runner after its current step.")
                 }
-                reportButton
             }
+        }
+    }
+
+    private var prDefault: Bool { model.runSettings?.mergeStyle == "pr" }
+
+    private func approve() {
+        if prDefault { confirmingPR = true } else { confirmingMerge = true }
+    }
+
+    @ViewBuilder private var queueButton: some View {
+        if let position = plan.queued {
+            Menu {
+                Button("Move Up") { Task { await model.perform(["queue", "up", plan.id], for: plan.id) } }.disabled(position == 1)
+                Button("Move Down") { Task { await model.perform(["queue", "down", plan.id], for: plan.id) } }.disabled(position == model.queue.count)
+                Divider()
+                Button("Remove from Queue") { Task { await model.perform(["queue", "remove", plan.id], for: plan.id) } }
+            } label: { Label("Queued #\(position)", systemImage: "list.bullet.indent") }
+            .fixedSize()
+        } else {
+            Button { Task { await model.perform(["queue", "add", plan.id], for: plan.id) } } label: { Label("Add to Queue", systemImage: "text.badge.plus") }
+                .help("Run after the plans before it, for example overnight. Start the queue from the sidebar.")
         }
     }
 
@@ -392,12 +488,17 @@ struct PlanDetail: View {
                     row("Starts from", [base, plan.baseCommit.map { String($0.prefix(7)) }, plan.baseSubject].compactMap { $0 }.removingDuplicates().joined(separator: " · "))
                 }
                 if let branch = plan.branch { row("Plan branch", branch) }
-                if let agents = plan.agents { row("Agents", agents.replacingOccurrences(of: ":", with: " works, ") + " reviews") }
+                if let agents = plan.agents { row("Agents", Self.agentsText(agents)) }
                 if plan.status != "draft" { row("Runner", plan.runner ? "running in the background" : "stopped") }
                 if let rules = plan.rules { row("Project rules", rules.isEmpty ? "none found" : rules.joined(separator: ", ")) }
             }
             .font(.callout)
         }
+    }
+
+    static func agentsText(_ spec: String) -> String {
+        let parts = spec.split(separator: ":").map { AgentRoles.name(String($0)) }
+        return parts.count > 1 && parts[0] != parts[1] ? "\(parts[0]) works, \(parts[1]) reviews" : "\(parts.first ?? spec) works and reviews (separately)"
     }
 
     private func row(_ label: String, _ value: String) -> some View {
@@ -523,9 +624,10 @@ struct StatusPill: View {
         case "draft": ("Draft", .blue)
         case "awaiting-approval": ("Ready to merge", .green)
         case "merged": ("Merged", .secondary)
+        case "pr-open": ("Pull request", .purple)
         case "blocked": ("Blocked", .red)
         default:
-            plan.blockedTask != nil ? ("Blocked", .red) : plan.isPaused ? ("Paused", .orange) : plan.runner ? ("Running", .accentColor) : ("Stopped", .secondary)
+            plan.blockedTask != nil ? ("Blocked", .red) : plan.isWaitingForLimit ? ("Waiting", .orange) : plan.isPaused ? ("Paused", .orange) : plan.runner ? ("Running", .accentColor) : ("Stopped", .secondary)
         }
         Text(text).font(.caption.weight(.semibold))
             .padding(.horizontal, 8).padding(.vertical, 3)

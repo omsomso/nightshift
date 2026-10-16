@@ -135,6 +135,33 @@ installed); push is impossible. Protected paths that no task may change by defau
 `.git`, `.github/`, `.claude/`, `.codex/`, `AGENTS.md`, `CLAUDE.md`, and Nightshift's
 own state.
 
+### Project checks
+
+Nightshift runs the plan's checks itself, and since 2026-10-16 inside macOS's sandbox
+(`src/sandbox.js`, `sandbox-exec`): writes are allowed only in the worktree, its git
+metadata, a private `TMPDIR`, `/private/tmp`, the user cache folder, `~/Library/Caches`,
+`~/.cache`, and `~/.npm` (plus `checkWritablePaths`), and outbound network is denied unless
+`checkNetwork` is on. A failure that looks like a sandbox denial gets a hint in its output.
+`sandboxChecks: false` turns it off. The readiness check uses the same sandbox.
+
+## Usage limits
+
+A turn that ends at the subscription's usage limit raises `UsageLimitError` with the reset
+time (Claude: the `rate_limit_event` message or the result text, including the
+`…|<epoch>` form; Codex: the error text or code; otherwise 30 minutes). The task goes back
+to ready without counting the attempt, the plan pauses with `waitUntil` (persisted), and
+the runner resumes it two minutes after the reset. `onUsageLimit: stop` blocks the task and
+pauses instead. A queued plan does not start during such a wait.
+
+## Owner fixes
+
+`accept <task>` (or Accept Fix in the app) takes what is in the worktree for a blocked
+task: protected paths still block it, the allowed paths and size cap do not apply, the
+checks must pass, and Nightshift commits it as the task without an agent review
+(`ownerFixed`). `fix-prompt` writes the context for an interactive Claude session and
+says where to run it: the worktree, or the project itself when the checks already fail at
+the start.
+
 ## Using it
 
 Usually you do not write the plan by hand: `node src/cli.js run <doc> [--steps ...]` (or
@@ -203,8 +230,9 @@ size) with a real agent, the per-turn 20-minute timeout, and a large repository.
 
 ## Not in the first version
 
-Parallel plans, automatic merge, pushing branches, a planning agent that writes the
-task list, network allowlists for package registries, and the web interface.
+Parallel plans, automatic merge, a planning agent that writes the task list, network
+allowlists for package registries, and the web interface. (Pushing a plan branch now
+happens only for an owner-approved pull request: `merge --pr`.)
 
 ## Decisions (owner, 2026-10-14)
 

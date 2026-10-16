@@ -8,7 +8,9 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { ClaudeAdapter, ClaudeReviewer } from '../src/adapters/claude.js';
 import { CodexAdapter } from '../src/adapters/codex.js';
 import { RpcClient } from '../src/codex/rpc-client.js';
-import { Supervisor, BillingGuardError, InterruptedError } from '../src/supervisor.js';
+import { Supervisor, BillingGuardError, InterruptedError, UsageLimitError } from '../src/supervisor.js';
+import { parseUsageLimit } from '../src/limits.js';
+import { mkdirSync } from 'node:fs';
 import { Store } from '../src/store.js';
 
 const fixtureFile = fileURLToPath(new URL('../fixtures/claude-cli.js', import.meta.url));
@@ -80,6 +82,60 @@ test('a turn that reports API-key billing is stopped before it starts', async ()
     error => error instanceof BillingGuardError && /API-key billing \(ANTHROPIC_API_KEY\)/.test(error.message));
   assert.ok(Date.now() - started < 2500, 'the process was killed rather than awaited');
   assert.equal(events.some(x => x.type === 'turn-started'), false);
+});
+
+test('usage-limit messages give a reset time in each known form', () => {
+  const now = new Date('2026-10-16T13:00:00');
+  const minutes = limit => Math.round((Date.parse(limit.resetsAt) - now) / 60_000);
+  assert.equal(parseUsageLimit('All good', now), null);
+  assert.equal(minutes(parseUsageLimit(`Claude AI usage limit reached|${Math.floor(now / 1000) + 3600}`, now)), 62, 'epoch, plus a small margin');
+  assert.equal(minutes(parseUsageLimit("You've hit your usage limit. Try again in 2 hours 5 minutes.", now)), 127);
+  assert.equal(minutes(parseUsageLimit("5-hour limit reached ∙ resets 3pm", now)), 122);
+  assert.equal(minutes(parseUsageLimit("Limit reached, resets at 11:30 am", now)), 22 * 60 + 32, 'a time already past means tomorrow');
+  const unknown = parseUsageLimit('Rate limit reached', now);
+  assert.deepEqual([unknown.known, minutes(unknown)], [false, 30]);
+});
+
+for (const mode of ['usage-limit', 'limit-event']) {
+  test(`claude reports a usage limit (${mode}) as UsageLimitError with its reset time`, async () => {
+    const error = await new ClaudeAdapter(options(mode)).execute(sampleTask, { onEvent: () => {} }).catch(e => e);
+    assert.ok(error instanceof UsageLimitError, String(error));
+    const hours = (Date.parse(error.resetsAt) - Date.now()) / 3_600_000;
+    assert.ok(hours > (mode === 'usage-limit' ? 0.9 : 1.9) && hours < (mode === 'usage-limit' ? 1.2 : 2.2), `resets in ${hours} h`);
+  });
+}
+
+test('at a usage limit the plan waits for the reset, the attempt does not count, then it continues', async t => {
+  let calls = 0;
+  let resetsAt = new Date(Date.now() + 3_600_000).toISOString();
+  const adapter = { async execute() { calls += 1; if (calls === 1) throw new UsageLimitError('Claude reached its usage limit.', resetsAt); return { summary: 'ok', evidence: ['x'] }; } };
+  const reviewer = { async review() { return { passed: true, reason: 'fine' }; } };
+  const { store, supervisor } = supervisorFixture(t, adapter, reviewer);
+  supervisor.add(sampleTask);
+  await supervisor.run();
+  let saved = store.read();
+  assert.deepEqual([saved.tasks[0].status, saved.tasks[0].attempts, saved.paused, saved.waitUntil], ['ready', 0, true, resetsAt]);
+  assert.ok(saved.events.some(e => e.type === 'usage-limit' && /Waiting until/.test(e.detail)));
+  assert.equal(await supervisor.tick(), false, 'still waiting before the reset');
+  supervisor.resumeAfterLimit(Date.parse(resetsAt) + 1);
+  await supervisor.run();
+  saved = store.read();
+  assert.deepEqual([saved.tasks[0].status, saved.tasks[0].attempts, saved.paused, saved.waitUntil], ['done', 1, false, undefined]);
+  assert.ok(saved.events.some(e => e.type === 'usage-limit-resumed'));
+});
+
+test('with onUsageLimit set to stop, a usage limit blocks the task and pauses instead', async t => {
+  const home = mkdtempSync(join(tmpdir(), 'nightshift-home-'));
+  const previous = process.env.NIGHTSHIFT_HOME;
+  process.env.NIGHTSHIFT_HOME = home;
+  t.after(() => { process.env.NIGHTSHIFT_HOME = previous; rmSync(home, { recursive: true, force: true }); });
+  writeFileSync(join(home, 'config.json'), JSON.stringify({ onUsageLimit: 'stop' }));
+  const adapter = { async execute() { throw new UsageLimitError('Codex reached its usage limit.', new Date().toISOString()); } };
+  const { store, supervisor } = supervisorFixture(t, adapter, { async review() {} });
+  supervisor.add(sampleTask);
+  await supervisor.run();
+  const saved = store.read();
+  assert.deepEqual([saved.tasks[0].status, saved.paused, saved.waitUntil], ['blocked', true, undefined]);
 });
 
 test('API-key billing blocks the task and pauses the whole queue', async t => {
