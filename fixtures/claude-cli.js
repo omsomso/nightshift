@@ -76,6 +76,12 @@ process.stdin.on('end', () => {
       result: JSON.stringify(result), structured_output: result };
     if (mode === 'denial') final.permission_denials = [{ tool_name: 'Bash', tool_use_id: 'toolu_2', tool_input: { command: 'rm -rf build' } }];
     if (mode === 'git-denial') final.permission_denials = [{ tool_name: 'Bash', tool_use_id: 'toolu_3', tool_input: { command: 'git commit -am "step done"' } }];
+    // Shapes of a subscription limit: an older text form with an epoch, and a newer event.
+    if (mode === 'usage-limit') Object.assign(final, { is_error: true, result: 'Claude AI usage limit reached|' + (Math.floor(Date.now() / 1000) + 3600), structured_output: undefined });
+    if (mode === 'limit-event') {
+      send({ type: 'rate_limit_event', rate_limit_info: { status: 'rejected', resetsAt: Math.floor(Date.now() / 1000) + 7200, rateLimitType: 'five_hour' } });
+      Object.assign(final, { is_error: true, result: "You've hit your limit", structured_output: undefined });
+    }
     if (mode === 'error-result') Object.assign(final, { subtype: 'error_max_turns', is_error: true, result: undefined, structured_output: undefined });
     if (mode === 'bad-output') Object.assign(final, { result: 'not JSON', structured_output: undefined });
     if (mode === 'text-result') final.structured_output = undefined;

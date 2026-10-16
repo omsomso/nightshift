@@ -29,7 +29,7 @@ function setupEnv(t) {
   const codexFixture = pathToFileURL(fileURLToPath(new URL('../fixtures/codex-server.js', import.meta.url))).href;
   writeFileSync(join(bin, 'claude'), `#!/usr/bin/env node\nif (process.argv[2] === '--version') console.log(process.env.FIXTURE_CLAUDE_VERSION ?? 'claude-fixture 1'); else if (process.argv[2] === 'auth') console.log(JSON.stringify({ loggedIn: true, authMethod: 'claude.ai', subscriptionType: 'plan' })); else { process.argv.splice(2, 0, 'normal'); import(${JSON.stringify(claudeFixture)}); }\n`, { mode: 0o700 });
   writeFileSync(join(bin, 'codex'), `#!/usr/bin/env node\nif (process.argv[2] === '--version') console.log('codex-fixture 1'); else if (process.argv[2] === 'login') console.error('Logged in using ChatGPT'); else { process.argv[2] = 'normal'; import(${JSON.stringify(codexFixture)}); }\n`, { mode: 0o700 });
-  const env = { ...process.env, NIGHTSHIFT_HOME: join(root, 'home'), NIGHTSHIFT_CLAUDE_BIN: join(bin, 'claude'), NIGHTSHIFT_CODEX_BIN: join(bin, 'codex') };
+  const env = { ...process.env, NIGHTSHIFT_HOME: join(root, 'home'), NIGHTSHIFT_LAUNCH_AGENTS: join(root, 'agents'), NIGHTSHIFT_LAUNCHD: '0', NIGHTSHIFT_CLAUDE_BIN: join(bin, 'claude'), NIGHTSHIFT_CODEX_BIN: join(bin, 'codex') };
   delete env.NIGHTSHIFT_CLAUDE_VERSION;
   delete env.NIGHTSHIFT_CODEX_VERSION;
   const cli = (...args) => execFileSync(process.execPath, [cliFile, ...args], { cwd: repo, env, encoding: 'utf8', timeout: 30_000 });
@@ -322,4 +322,134 @@ test('check reports where a plan would start, what it leaves out, and whether th
   // Without --check, a repository's latest plan supplies the checks; --no-run only reports.
   const known = JSON.parse(e.cli('check', '--repo', e.repo, '--no-run', '--json'));
   assert.deepEqual([known.checks.source, known.checks.ran, known.ready], [`plan ${drafted.id}`, false, null]);
+});
+
+test('queued plans run one after another: the next starts when the running one stops for the owner', async t => {
+  const e = setupEnv(t);
+  e.cli('setup');
+  const first = JSON.parse(e.cli('draft', 'docs/PLAN.md', '--json')).id;
+  const second = JSON.parse(e.cli('draft', 'docs/PLAN.md', '--json')).id;
+  e.cli('queue', 'add', first);
+  e.cli('queue', 'add', second);
+  assert.deepEqual(JSON.parse(e.cli('queue', 'up', second, '--json')).queue, [second, first]);
+  assert.deepEqual(e.json().plans.map(p => [p.id, p.queued]), [[first, 2], [second, 1]]);
+  assert.match(e.cli('queue', 'start'), new RegExp(`Started ${second}`));
+  await until(() => e.json().plans.every(p => p.status === 'awaiting-approval'), 40_000);
+  assert.deepEqual(e.json().queue, []);
+  const state = Store.inspect(join(e.env.NIGHTSHIFT_HOME, 'plans', second));
+  assert.ok(state.events.some(ev => ev.type === 'queue-advanced' && ev.detail.includes(first)));
+});
+
+test('autostart installs a login item; resume-runners restarts runners that were on, not ones the owner stopped', async t => {
+  const e = setupEnv(t);
+  e.cli('setup');
+  assert.match(e.cli('autostart', 'on'), /On: runners that were on start again at login/);
+  const plist = readFileSync(join(e.env.NIGHTSHIFT_LAUNCH_AGENTS, 'com.nightshift.runners.plist'), 'utf8');
+  assert.match(plist, /<string>resume-runners<\/string>/);
+  assert.match(plist, /<key>RunAtLoad<\/key><true\/>/);
+  assert.equal(JSON.parse(e.cli('settings', '--json')).autostart, true);
+  const id = JSON.parse(e.cli('draft', 'docs/PLAN.md', '--json')).id;
+  e.cli('start', id);
+  e.cli('pause', '--plan', id);
+  await until(() => Store.inspect(join(e.env.NIGHTSHIFT_HOME, 'plans', id)).paused);
+  // A restart: the runner dies without being stopped.
+  const runner = Store.inspect(join(e.env.NIGHTSHIFT_HOME, 'plans', id)).runner;
+  process.kill(runner.pid, 'SIGKILL');
+  await until(() => !e.json().plans.find(p => p.id === id).runner);
+  assert.match(e.cli('resume-runners'), new RegExp(`Started: ${id}`));
+  assert.equal(e.json().plans.find(p => p.id === id).runner, true);
+  // An explicit stop is remembered.
+  e.cli('stop', id);
+  assert.match(e.cli('resume-runners'), /Nothing to start/);
+  e.cli('autostart', 'off');
+  assert.equal(existsSync(join(e.env.NIGHTSHIFT_LAUNCH_AGENTS, 'com.nightshift.runners.plist')), false);
+});
+
+test('run settings are validated and stored', t => {
+  const e = setupEnv(t);
+  e.cli('settings', 'set', 'onUsageLimit', 'stop');
+  e.cli('settings', 'set', 'mergeStyle', 'pr');
+  e.cli('settings', 'set', 'sandboxChecks', 'false');
+  assert.deepEqual(JSON.parse(e.cli('settings', '--json')), { onUsageLimit: 'stop', sandboxChecks: false, checkNetwork: false, mergeStyle: 'pr', autostart: false });
+  const bad = spawnSync(process.execPath, [cliFile, 'settings', 'set', 'mergeStyle', 'push'], { env: e.env, encoding: 'utf8' });
+  assert.equal(bad.status, 1);
+  assert.match(bad.stderr, /must be one of: local, pr/);
+});
+
+test('approval can open a pull request instead: the branch is pushed and gh opens it into the base branch', async t => {
+  const e = setupEnv(t);
+  e.cli('setup');
+  const remote = join(e.root, 'origin.git');
+  git(e.root, 'init', '-q', '--bare', '-b', 'main', remote);
+  git(e.repo, 'remote', 'add', 'origin', remote);
+  git(e.repo, 'push', '-q', '-u', 'origin', 'main');
+  // A stand-in GitHub CLI that records its arguments.
+  const ghLog = join(e.root, 'gh.log');
+  writeFileSync(join(e.root, 'bin', 'gh'), `#!/bin/sh\necho "$@" >> ${ghLog}\n[ "$1" = auth ] && exit 0\necho "Creating pull request"\necho "https://github.com/example/repo/pull/7"\n`, { mode: 0o755 });
+  e.env.NIGHTSHIFT_GH_BIN = join(e.root, 'bin', 'gh');
+  const id = JSON.parse(e.cli('draft', 'docs/PLAN.md', '--json')).id;
+  e.cli('start', id);
+  await until(() => e.json().plans.find(p => p.id === id && p.status === 'awaiting-approval'), 30_000);
+  assert.match(e.cli('merge', id, '--pr'), /opened a pull request into main: https:\/\/github.com\/example\/repo\/pull\/7/);
+  assert.match(git(remote, 'branch', '--list', `nightshift/${id}`), new RegExp(`nightshift/${id}`), 'the plan branch was pushed');
+  assert.match(readFileSync(ghLog, 'utf8'), new RegExp(`pr create --base main --head nightshift/${id} --title Write two notes\\.`));
+  const plan = e.json().plans.find(p => p.id === id);
+  assert.deepEqual([plan.status, plan.pullRequest], ['pr-open', 'https://github.com/example/repo/pull/7']);
+  assert.equal(git(e.repo, 'log', '-1', '--format=%s', 'main'), 'initial', 'nothing was merged locally');
+  assert.match(spawnSync(process.execPath, [cliFile, 'discard', id], { env: e.env, encoding: 'utf8' }).stderr, /stay on GitHub/);
+  e.cli('discard', id, '--yes');
+  assert.match(git(remote, 'branch', '--list', `nightshift/${id}`), /nightshift/, 'the remote branch stays');
+});
+
+test('a draft can be edited before approval: reword, reorder, remove, add tasks, change checks', t => {
+  const e = setupEnv(t);
+  e.cli('setup');
+  const drafted = JSON.parse(e.cli('draft', 'docs/PLAN.md', '--json'));
+  const [one, two] = drafted.draft.plan.tasks;
+  const changes = join(e.root, 'changes.json');
+  writeFileSync(changes, JSON.stringify({ checks: ['node check.js', 'node -e "1"'], tasks: [
+    { ...two, title: 'Write note two first' }, { title: 'Write a third note', acceptance: 'notes/three.txt exists.' }, { title: 'Write a third note', acceptance: 'Again.' }] }));
+  const edited = JSON.parse(e.cli('edit', drafted.id, '--file', changes, '--json'));
+  assert.deepEqual(edited.tasks.map(t => t.id), [two.id, 'write-a-third-note', 'write-a-third-note-2']);
+  assert.equal(edited.tasks[0].title, 'Write note two first');
+  assert.equal(edited.limits.dispatches, 11);
+  const listed = e.json().plans.find(p => p.id === drafted.id);
+  assert.deepEqual(listed.tasks.map(t => t.title), ['Write note two first', 'Write a third note', 'Write a third note']);
+  assert.ok(!listed.tasks.some(t => t.id === one.id), 'removed task is gone');
+  writeFileSync(changes, JSON.stringify({ checks: [] }));
+  const bad = spawnSync(process.execPath, [cliFile, 'edit', drafted.id, '--file', changes], { env: e.env, encoding: 'utf8' });
+  assert.equal(bad.status, 1);
+  assert.match(bad.stderr, /checks must list at least one command/);
+});
+
+test('review, activity, usage, and fix-prompt describe a plan for the owner', async t => {
+  const e = setupEnv(t);
+  e.cli('setup');
+  const done = JSON.parse(e.cli('draft', 'docs/PLAN.md', '--json')).id;
+  e.cli('start', done);
+  await until(() => e.json().plans.find(p => p.id === done && p.status === 'awaiting-approval'), 30_000);
+  const review = JSON.parse(e.cli('review', done, '--json'));
+  assert.equal(review.tasks.length, 2);
+  assert.match(review.tasks[0].diff, /\+\+\+ b\/notes\/task-1\.txt/);
+  assert.equal(review.tasks[0].review.reason, 'Fixture review only.');
+  assert.equal(review.tasks[0].checks.passed, true);
+  assert.match(review.final.stat, /2 files changed/);
+  assert.match(review.final.diff, /task-2\.txt/);
+  const live = JSON.parse(e.cli('activity', done, '--json'));
+  assert.ok(live.lines.some(l => l.kind === 'tool' && /Read README\.md/.test(l.text)), 'tool calls show what they touched');
+  assert.ok(live.lines.some(l => l.kind === 'commit'));
+  const used = JSON.parse(e.cli('usage', '--json'));
+  assert.equal(used.plans.find(p => p.id === done).turns > 0, true);
+  assert.equal(used.days.length, 1);
+  // A blocked plan gets a prompt for an interactive fix.
+  writeFileSync(join(e.repo, 'check.js'), "const fs = require('fs'); for (const f of fs.readdirSync('notes')) if (fs.readFileSync('notes/' + f, 'utf8').includes('BAD')) { console.error('BAD in notes/' + f); process.exit(1); }\n");
+  git(e.repo, 'commit', '-qam', 'stricter check');
+  e.env.FIXTURE_EDIT_CONTENT = 'BAD';
+  const blocked = JSON.parse(e.cli('draft', 'docs/PLAN.md', '--json')).id;
+  e.cli('start', blocked);
+  await until(() => e.json().plans.find(p => p.id === blocked)?.blocker, 30_000);
+  const fix = JSON.parse(e.cli('fix-prompt', blocked, '--json'));
+  assert.match(fix.cwd, /worktree$/);
+  assert.match(fix.prompt, new RegExp(`nightshift accept note-one --plan ${blocked}`));
+  assert.match(fix.prompt, /BAD in notes/);
 });

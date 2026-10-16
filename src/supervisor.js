@@ -1,4 +1,5 @@
 import { workerEffort, reviewerEffort } from './effort.js';
+import { readConfig } from './home.js';
 
 export class BlockedError extends Error {}
 // Both of these block the task and pause the whole queue.
@@ -6,6 +7,12 @@ export class BlockedError extends Error {}
 export class BillingGuardError extends BlockedError {}
 // The owner stopped the turn in flight and takes over from here.
 export class InterruptedError extends BlockedError {}
+// The subscription's usage limit was reached. By default the plan waits for the reset and
+// carries on; the attempt does not count. `resetsAt` is an ISO time.
+export class UsageLimitError extends BlockedError {
+  constructor(message, resetsAt) { super(message); this.resetsAt = resetsAt; }
+}
+const waitsForLimits = () => (readConfig().onUsageLimit ?? 'wait') !== 'stop';
 
 const checkDigest = checks => checks.results.map(r =>
   `$ ${r.command} -> exit ${r.timedOut ? 'timeout' : r.exitCode}\n${r.output}`).join('\n\n');
@@ -100,6 +107,7 @@ export class Supervisor {
         else if (command.type === 'limit') this.setLimit(command.payload?.name, command.payload?.value);
         else if (command.type === 'difficulty') this.setDifficulty(command.payload?.id, command.payload?.level);
         else if (command.type === 'skip') this.skip(command.payload?.id);
+        else if (command.type === 'accept') this.acceptFix(command.payload?.id);
         else throw new Error('Unknown command.');
       } catch (error) {
         this.record(command.payload?.id ?? null, 'command-rejected', `${command.type}: ${error.message}`);
@@ -129,6 +137,27 @@ export class Supervisor {
     limits[name] = Number(value);
     if (this.workspace) this.workspace.limits = limits;
     this.record(null, 'limit-changed', `${name} = ${value}`);
+    this.store.save(this.state);
+  }
+
+  // Pauses until the provider's usage limit resets; the paused task stays ready.
+  waitForLimit(error) {
+    const resetsAt = error.resetsAt ?? new Date(Date.now() + 30 * 60_000).toISOString();
+    this.state.waitUntil = resetsAt;
+    this.state.paused = true;
+    this.record(null, 'usage-limit', `${error.message} Waiting until ${resetsAt}, then continuing.`);
+    this.store.save(this.state);
+  }
+
+  // Ends a usage-limit pause once its time has passed. An owner's own pause is left alone.
+  resumeAfterLimit(now = Date.now()) {
+    const until = this.state.waitUntil;
+    if (!until) return;
+    if (!this.state.paused) { delete this.state.waitUntil; this.store.save(this.state); return; }
+    if (now < Date.parse(until)) return;
+    delete this.state.waitUntil;
+    this.state.paused = false;
+    this.record(null, 'usage-limit-resumed', 'The usage limit has reset; continuing.');
     this.store.save(this.state);
   }
 
@@ -176,6 +205,7 @@ export class Supervisor {
   async tick() {
     if (this.busy) return false;
     this.applyCommands();
+    this.resumeAfterLimit();
     if (this.state.paused) return false;
     if (this.planLimitReached()) return false;
     if (this.state.plan?.status !== undefined && this.state.plan.status !== 'running') return false;
@@ -186,6 +216,7 @@ export class Supervisor {
       if (this.workspace && this.state.tasks.every(t => t.status === 'done')) return this.finishPlan();
       return false;
     }
+    if (task.ownerFix && this.workspace) return this.checkOwnerFix(task);
     this.busy = true;
     const abort = new AbortController();
     this.current = { task, abort };
@@ -337,6 +368,55 @@ export class Supervisor {
     }
   }
 
+  // The owner fixed a blocked task by hand (for example with Claude in the worktree). The next
+  // tick runs the gates and checks on what is in the worktree and, if they pass, commits it
+  // as the task without an agent review: the owner is the reviewer here.
+  acceptFix(id) {
+    const task = this.state.tasks.find(candidate => candidate.id === id);
+    if (!task) throw new Error(`Unknown task ${id}.`);
+    if (task.status !== 'blocked') throw new Error(`Task ${id} is ${task.status}; only a blocked task takes the owner's fix.`);
+    if (!this.workspace) throw new Error('Only edit-mode plans take the owner\'s fix.');
+    task.status = 'ready';
+    task.ownerFix = true;
+    delete task.lastFailure;
+    this.record(id, 'owner-fix-submitted', 'The owner\'s fix in the worktree will be checked and committed as this task.');
+    this.store.save(this.state);
+  }
+
+  async checkOwnerFix(task) {
+    const abort = new AbortController();
+    this.busy = true;
+    this.current = { task, abort };
+    try {
+      task.status = 'running';
+      delete task.ownerFix;
+      this.store.save(this.state);
+      const change = this.workspace.inspect();
+      const gate = this.workspace.gate(change, { owner: true });
+      this.record(task.id, 'change-inspected', { files: change.files.map(f => f.path), changedLines: change.changedLines, gate: gate.verdict, owner: true });
+      if (gate.verdict === 'block') return this.block(task, new BlockedError(`The owner's fix was not accepted: ${gate.reason}`)), true;
+      const checks = await this.workspace.runChecks({ signal: abort.signal });
+      if (abort.signal.aborted) throw abort.signal.reason;
+      this.record(task.id, 'checks', { passed: checks.passed, results: checks.results });
+      if (!checks.passed) return this.block(task, new BlockedError(`The owner's fix fails the checks:\n${checkDigest(checks).slice(0, 3000)}`)), true;
+      task.review = { passed: true, reason: 'Fixed and accepted by the owner; the checks pass.' };
+      task.reason = task.review.reason;
+      task.commit = this.workspace.commit(task, this.state.plan.id);
+      task.status = 'done';
+      task.ownerFixed = true;
+      this.record(task.id, 'committed', task.commit);
+      this.record(task.id, 'verified', task.review.reason);
+      this.store.save(this.state);
+      return true;
+    } catch (error) {
+      this.block(task, error);
+      return true;
+    } finally {
+      this.busy = false;
+      this.current = null;
+    }
+  }
+
   // The owner decides a task is not needed (for example a check-only step): it counts as
   // done without a change or commit, and dependent tasks can proceed.
   skip(id) {
@@ -393,6 +473,7 @@ export class Supervisor {
     } catch (error) {
       // An interrupt leaves the plan running but paused; anything else blocks it.
       if (error instanceof InterruptedError) return stop(error.message, 'running');
+      if (error instanceof UsageLimitError && waitsForLimits()) { this.waitForLimit(error); return true; }
       return stop(`Final phase failed: ${error.message ?? String(error)}`);
     } finally {
       this.busy = false;
@@ -422,6 +503,12 @@ export class Supervisor {
     // An abort can surface as a provider error (for example a killed process); the
     // owner's interrupt is the real cause.
     if (this.current?.abort.signal.aborted && !(error instanceof InterruptedError)) error = this.current.abort.signal.reason;
+    if (error instanceof UsageLimitError && waitsForLimits()) {
+      task.status = 'ready';
+      task.attempts = Math.max(0, task.attempts - 1);
+      this.record(task.id, 'usage-limit-hit', 'The attempt stopped at the usage limit; it will run again after the reset and does not count.');
+      return this.waitForLimit(error);
+    }
     task.status = 'blocked';
     task.reason = error instanceof BlockedError ? error.message : `Execution uncertain: ${error.message ?? String(error)}`;
     this.record(task.id, 'blocked', task.reason);
@@ -431,6 +518,10 @@ export class Supervisor {
         if (['dispatching', 'running'].includes(session.status)) session.status = 'interrupted';
       }
       this.record(task.id, 'interrupted', 'Queue paused: the owner has taken over. Retry the task and resume when ready.');
+      this.state.paused = true;
+    }
+    if (error instanceof UsageLimitError) {
+      this.record(null, 'usage-limit', `${error.message} Queue paused (set to stop at usage limits): retry the task and resume after ${error.resetsAt ?? 'the reset'}.`);
       this.state.paused = true;
     }
     if (error instanceof BillingGuardError) {

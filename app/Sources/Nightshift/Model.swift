@@ -6,6 +6,8 @@ import UserNotifications
 struct PlanList: Decodable {
     let home: String
     let plans: [Plan]
+    let queue: [String]?
+    let settings: RunSettings?
 }
 
 struct Plan: Decodable, Identifiable, Hashable {
@@ -29,6 +31,9 @@ struct Plan: Decodable, Identifiable, Hashable {
     let baseBranch: String?
     let baseSubject: String?
     let warnings: [String]?
+    let waitUntil: String?
+    let queued: Int?
+    let pullRequest: String?
     let tasks: [PlanTask]
     let limits: Limits?
     let lastEvent: LastEvent?
@@ -38,6 +43,10 @@ struct Plan: Decodable, Identifiable, Hashable {
     // when a plan changed, for example from draft to running.
 
     var isPaused: Bool { paused ?? false }
+    // Paused only until the provider's usage limit resets; continues by itself.
+    var isWaitingForLimit: Bool { waitUntil != nil && isPaused }
+    var waitUntilDate: Date? { waitUntil.flatMap { ISO8601DateFormatter.withFractions.date(from: $0) ?? ISO8601DateFormatter().date(from: $0) } }
+    var hasCommits: Bool { tasks.contains { $0.commit != nil } }
     var doneCount: Int { tasks.filter { $0.status == "done" }.count }
     var blockedTask: PlanTask? { tasks.first { $0.status == "blocked" } }
 
@@ -47,9 +56,11 @@ struct Plan: Decodable, Identifiable, Hashable {
         case "draft": return "Draft — waiting for your approval"
         case "awaiting-approval": return "Ready to merge"
         case "merged": return "Merged"
+        case "pr-open": return "Pull request open"
         case "blocked": return "Blocked — needs you"
         default:
             if blockedTask != nil { return "Blocked — needs you" }
+            if isWaitingForLimit { return "Waiting for the usage limit" }
             if isPaused { return "Paused" }
             if let current { return "Working on: \(current.title)" }
             return runner ? "Running" : "Not running"
@@ -57,7 +68,7 @@ struct Plan: Decodable, Identifiable, Hashable {
     }
 
     var needsAttention: Bool {
-        status == "awaiting-approval" || status == "blocked" || blockedTask != nil || (status == "running" && isPaused)
+        status == "awaiting-approval" || status == "blocked" || blockedTask != nil || (status == "running" && isPaused && !isWaitingForLimit)
     }
 }
 
@@ -97,6 +108,7 @@ struct Config: Decodable {
     let node: String?
     let cli: String?
     let disabledProviders: [String]?
+    let commands: [String: String]?
 
     static func load() -> Config? {
         let file = CLI.homeDirectory.appendingPathComponent("config.json")
@@ -195,6 +207,8 @@ struct CLI {
 final class AppModel {
     var plans: [Plan] = []
     var selection: String?
+    var queue: [String] = []
+    var runSettings: RunSettings?
     var errorMessage: String?
     var busy: Set<String> = []
     var lastRefresh: Date?
@@ -224,6 +238,8 @@ final class AppModel {
             let list = try JSONDecoder().decode(PlanList.self, from: Data(output.utf8))
             notifyChanges(list.plans)
             plans = list.plans
+            queue = list.queue ?? []
+            runSettings = list.settings
             if selection == nil || !plans.contains(where: { $0.id == selection }) && ProcessInfo.processInfo.environment["NIGHTSHIFT_SELECT"] == nil { selection = selection ?? plans.first?.id }
             lastRefresh = Date()
             if errorMessage?.hasPrefix("Nightshift is not set up") == true { errorMessage = nil }
@@ -435,4 +451,76 @@ struct Readiness: Decodable, Hashable {
     let warnings: [GitWarning]
     let checks: Checks
     let ready: Bool?
+}
+
+extension ISO8601DateFormatter {
+    static let withFractions: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+}
+
+// `nightshift settings --json` (also inside `list --json`).
+struct RunSettings: Decodable, Hashable {
+    let onUsageLimit: String
+    let sandboxChecks: Bool
+    let checkNetwork: Bool
+    let mergeStyle: String
+    let autostart: Bool
+}
+
+// `nightshift review <id> --json`
+struct ReviewData: Decodable, Hashable {
+    struct Verdict: Decodable, Hashable { let passed: Bool; let reason: String }
+    struct Checks: Decodable, Hashable {
+        struct Result: Decodable, Hashable { let command: String; let exitCode: Int?; let timedOut: Bool?; let durationMs: Int?; let output: String? }
+        let passed: Bool
+        let results: [Result]
+    }
+    struct Task: Decodable, Hashable, Identifiable {
+        let id: String
+        let title: String
+        let acceptance: String?
+        let status: String
+        let attempts: Int
+        let commit: String?
+        let skipped: Bool
+        let ownerFixed: Bool
+        let review: Verdict?
+        let summary: String?
+        let checks: Checks?
+        let stat: String
+        let diff: String
+    }
+    struct Final: Decodable, Hashable {
+        let stat: String
+        let files: String
+        let diff: String
+        let checks: Checks?
+        let review: Verdict?
+    }
+    let id: String
+    let status: String
+    let branch: String
+    let base: String
+    let tasks: [Task]
+    let final: Final?
+}
+
+// `nightshift activity <id> --json`
+struct ActivityData: Decodable, Hashable {
+    struct Line: Decodable, Hashable { let at: String; let kind: String; let task: String?; let text: String }
+    let waitUntil: String?
+    let lines: [Line]
+}
+
+// `nightshift usage --json`
+struct UsageReport: Decodable, Hashable {
+    struct Day: Decodable, Hashable, Identifiable { let day: String; let input: Int; let output: Int; let turns: Int; let plans: [String]; var id: String { day } }
+    struct PlanUsage: Decodable, Hashable, Identifiable { let id: String; let status: String?; let input: Int; let output: Int; let turns: Int; let dispatches: Int; let costUsd: Double; let hours: Double? }
+    struct Total: Decodable, Hashable { let input: Int; let output: Int; let turns: Int; let costUsd: Double }
+    let days: [Day]
+    let plans: [PlanUsage]
+    let total: Total
 }

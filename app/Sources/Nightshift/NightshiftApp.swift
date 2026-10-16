@@ -16,7 +16,13 @@ struct NightshiftApp: App {
         }
         .defaultSize(width: 1040, height: 680)
         Settings {
-            AccountsView().environment(model)
+            // NIGHTSHIFT_SETTINGS_TAB=runs|usage opens that tab (development aid).
+            TabView(selection: .constant(ProcessInfo.processInfo.environment["NIGHTSHIFT_SETTINGS_TAB"] ?? "accounts")) {
+                AccountsView().tabItem { Label("Accounts", systemImage: "person.crop.circle") }.tag("accounts")
+                RunsSettingsView().tabItem { Label("Runs", systemImage: "moon.zzz") }.tag("runs")
+                UsageView().tabItem { Label("Usage", systemImage: "chart.bar") }.tag("usage")
+            }
+            .environment(model)
         }
         MenuBarExtra {
             MenuContent().environment(model)

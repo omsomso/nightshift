@@ -358,12 +358,39 @@ s += [PageBreak(), P('The Nightshift app', h1),
       callout('First launch', 'macOS may ask to allow notifications; say yes to get the alerts. The app is signed for '
               'local use only, so if macOS warns that it cannot check it, right-click the app and choose Open once.', ACCENT)]
 
+# 5b — Overnight and morning
+s += [PageBreak(), P('Overnight and in the morning', h1),
+      P('Options are in the app under Settings, Runs. Each one is also a command.', lead),
+      table([['Feature', 'What it does', 'Where'],
+             ['Usage limits', 'When the subscription limit is reached, the plan waits for the reset and continues; the attempt does not count. '
+              'The plan view says when it continues.', 'Runs: wait or stop'],
+             ['Sandboxed checks', 'Your tests and builds may write only inside the plan\'s worktree and temp folders, with no network, '
+              'so a build step cannot change your own checkout.', 'Runs: on by default'],
+             ['Queue', 'Line up plans; each starts when the one before stops for you (ready, blocked, or paused).', 'Add to Queue; sidebar Start'],
+             ['After a restart', 'A login item restarts the runners that were on. Ones you stopped stay stopped.', 'Runs: start at login'],
+             ['Live activity', 'What the agents just did: files, commands, checks, reviews, commits.', 'Activity card'],
+             ['Edit a draft', 'Reword, reorder, remove, or add tasks; change checks and allowed paths.', 'Edit (drafts)'],
+             ['Review', 'Each task\'s diff, reviewer verdict, and checks; the whole plan\'s diff.', 'Review Changes'],
+             ['Fix with Claude', 'Opens Claude in Terminal in the plan\'s worktree, already told what went wrong. Then Accept Fix '
+              'checks your fix and commits it as the task.', 'Blocked plans'],
+             ['Pull request', 'Approve by pushing the plan branch and opening a pull request (GitHub CLI) instead of merging locally.', 'Runs: approval'],
+             ['Usage', 'Tokens and turns per day and per plan.', 'Settings, Usage']],
+            [30 * mm, FULL - 72 * mm, 42 * mm]),
+      code('''nightshift queue add ID              # then: queue start
+nightshift autostart on              # restart runners at login
+nightshift settings set mergeStyle pr  # approve as pull requests
+nightshift review ID                 # before approving
+nightshift activity ID               # what is happening now
+nightshift fix-prompt ID             # context for a fix with Claude
+nightshift accept TASK --plan ID     # take your fix
+nightshift usage''')]
+
 # 6 — Safety
 s += [PageBreak(), P('Safety: what agents can and cannot do', h1),
       P('The limits are enforced by the operating system and by Nightshift\'s own code, not just by instructions to the '
         'agent. They were tested with real agents asked to break them.', lead),
       table([['Agents can', 'Agents cannot'],
-             ['Read the project and edit files inside the plan\'s worktree.', 'Write outside the worktree (apart from a temporary folder).'],
+             ['Read the project and edit files inside the plan\'s worktree.', 'Write outside the worktree (apart from a temporary folder). The project\'s checks are fenced the same way.'],
              ['Run the commands their task needs: builds, tests, scripts.', 'Reach the network: no web, no package installs, no pushing.'],
              ['See the results of the checks Nightshift runs.', 'Commit, push, rebase, reset, or otherwise change git history.'],
              ['', 'Read your SSH keys, cloud credentials, GitHub login, or keychain.'],
@@ -460,7 +487,8 @@ nightshift difficulty TASK high --plan ID  # worker starts at more effort
 nightshift stop ID                  # and: start ID
 
 # finish
-nightshift merge ID                 # your approval
+nightshift review ID                # look before you approve
+nightshift merge ID                 # your approval (--pr: pull request)
 nightshift discard ID --yes         # or throw it away
 
 # providers

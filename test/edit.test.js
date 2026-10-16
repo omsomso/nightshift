@@ -412,3 +412,57 @@ test('files a build changes inside a submodule do not count as the plan\'s chang
   assert.equal(state.plan.status, 'awaiting-approval', state.plan.reason);
   assert.deepEqual(state.events.filter(e => e.type === 'change-inspected').map(e => e.detail.files), [['notes/one.txt'], ['notes/two.txt']]);
 });
+
+test('checks run in a sandbox: writes outside the worktree and network fail, with a hint; it can be turned off', async t => {
+  const env = makeRepo(t);
+  const home = mkdtempSync(join(tmpdir(), 'nightshift-home-'));
+  const previous = process.env.NIGHTSHIFT_HOME;
+  process.env.NIGHTSHIFT_HOME = home;
+  t.after(() => { process.env.NIGHTSHIFT_HOME = previous; rmSync(home, { recursive: true, force: true }); });
+  const worktree = join(env.root, 'wt');
+  git(env.repo, 'worktree', 'add', '-q', '--detach', worktree);
+  const outside = join(env.repo, 'escaped.txt');
+  const checks = ['echo inside > inside.txt', `echo outside > ${JSON.stringify(outside)}`, 'echo t > "$TMPDIR/t.txt"'];
+  const workspace = new Workspace({ repo: env.repo, worktree, checks, limits: { checkMinutes: 1 } });
+  const sandboxed = await workspace.runChecks();
+  assert.deepEqual(sandboxed.results.map(r => r.exitCode === 0), [true, false, true]);
+  assert.equal(sandboxed.results[1].sandboxed, true);
+  assert.match(sandboxed.results[1].output, /Operation not permitted[\s\S]*runs in a sandbox/);
+  assert.equal(existsSync(outside), false, 'the owner\'s checkout was not touched');
+  writeFileSync(join(home, 'config.json'), JSON.stringify({ sandboxChecks: false }));
+  const open = await workspace.runChecks();
+  assert.equal(open.passed, true);
+  assert.equal(existsSync(outside), true);
+});
+
+test('the owner can fix a blocked task in the worktree; accept checks it and commits it as the task', async t => {
+  const env = makeRepo(t);
+  const worker = scriptedWorker({ one: { 'notes/one.txt': 'BAD\n' } });
+  const { store, workspace, supervisor } = startPlan(t, env, worker, scriptedReviewer());
+  await supervisor.run();
+  let state = store.read();
+  assert.equal(state.tasks[0].status, 'blocked');
+  // The owner (with Claude) fixes it by hand, here also touching a file outside the allowed paths.
+  writeFileSync(join(workspace.worktree, 'notes', 'one.txt'), 'fixed by hand\n');
+  writeFileSync(join(workspace.worktree, 'HANDNOTE.md'), 'why\n');
+  Store.enqueue(env.state, 'accept', { id: 'one' });
+  await supervisor.run();
+  state = store.read();
+  const one = state.tasks[0];
+  assert.deepEqual([one.status, one.ownerFixed, one.review.reason], ['done', true, 'Fixed and accepted by the owner; the checks pass.']);
+  assert.match(git(workspace.worktree, 'show', '--stat', '--format=%s', one.commit), /Write note one[\s\S]*HANDNOTE\.md/);
+  assert.equal(worker.calls.filter(c => c.task === 'one').length, 2, 'no agent ran for the owner\'s fix');
+  assert.equal(state.plan.status, 'awaiting-approval');
+});
+
+test('an owner fix that still fails the checks blocks again with the output', async t => {
+  const env = makeRepo(t);
+  const { store, workspace, supervisor } = startPlan(t, env, scriptedWorker({ one: { 'notes/one.txt': 'BAD\n' } }), scriptedReviewer());
+  await supervisor.run();
+  writeFileSync(join(workspace.worktree, 'notes', 'one.txt'), 'still BAD\n');
+  Store.enqueue(env.state, 'accept', { id: 'one' });
+  await supervisor.run();
+  const one = store.read().tasks[0];
+  assert.equal(one.status, 'blocked');
+  assert.match(one.reason, /owner's fix fails the checks[\s\S]*BAD in one\.txt/);
+});

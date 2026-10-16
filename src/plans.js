@@ -11,6 +11,7 @@ import { collectRules } from './rules.js';
 import { resolveBase } from './base.js';
 import { validateEffort } from './effort.js';
 import { readConfig } from './home.js';
+import { advanceQueue, readQueue } from './queue.js';
 
 const cliFile = fileURLToPath(new URL('./cli.js', import.meta.url));
 const git = (cwd, ...args) => execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
@@ -64,6 +65,8 @@ export async function startPlan(id, { agents } = {}) {
     createPlan(validatePlan(draft.plan, draft.plan.repo, `draft ${id}`), dir, { agents: agents ?? draft.agents });
     state = Store.inspect(dir);
   }
+  // Remembered so autostart can bring the runner back after a restart; an explicit stop clears it.
+  writeFileSync(join(dir, 'runner-wanted'), new Date().toISOString() + '\n');
   if (state.runner?.alive) return { id, dir, pid: state.runner.pid, already: true };
   const spec = agents ?? state.plan.agents;
   if (!spec) throw new Error('No agents recorded for this plan; pass --agents.');
@@ -90,6 +93,7 @@ export function tailLog(dir, lines = 5) {
 // Stops the runner after its current step (SIGTERM), waiting up to `waitMs`.
 export async function stopRunner(id, { waitMs = 15_000 } = {}) {
   const dir = planDir(id);
+  rmSync(join(dir, 'runner-wanted'), { force: true });
   const runner = Store.inspect(dir).runner;
   if (!runner?.alive) return false;
   process.kill(runner.pid, 'SIGTERM');
@@ -101,11 +105,12 @@ export async function stopRunner(id, { waitMs = 15_000 } = {}) {
 
 // The owner's approval: merge the plan branch into the repository's current branch.
 // Refuses on a dirty checkout, a detached HEAD, or a conflict (which it aborts).
-export async function mergePlan(id) {
+export async function mergePlan(id, { style = readConfig().mergeStyle ?? 'local' } = {}) {
   const dir = planDir(id);
   const before = Store.inspect(dir).plan;
   if (!before) throw new Error(`No plan named ${id}.`);
   if (before.status !== 'awaiting-approval') throw new Error(`Plan ${id} is ${before.status}; only a plan awaiting approval can be merged.`);
+  if (style === 'pr') return openPullRequest(id);
   await stopRunner(id);
   const { repo, branch, worktree } = before;
   // Merge into the branch the plan started from (for example main), wherever it is checked
@@ -147,6 +152,42 @@ export async function mergePlan(id) {
   return { target, merged, branch };
 }
 
+// The other way to approve: push the plan branch and open a pull request into the branch the
+// plan started from, for projects that merge through GitHub. Uses the GitHub CLI (`gh`) as
+// the owner is signed in to it. The approval in the app or the explicit command is the
+// owner's consent to push this one branch.
+export async function openPullRequest(id) {
+  const dir = planDir(id);
+  const state = Store.inspect(dir);
+  const plan = state.plan;
+  if (plan?.status !== 'awaiting-approval') throw new Error(`Plan ${id} is ${plan?.status ?? 'missing'}; only a plan awaiting approval can become a pull request.`);
+  const gh = process.env.NIGHTSHIFT_GH_BIN ?? 'gh';
+  if (tryGit(plan.repo, 'remote', 'get-url', 'origin') === null) throw new Error(`${plan.repo} has no origin remote to open a pull request on.`);
+  try { execFileSync(gh, ['auth', 'status'], { cwd: plan.repo, stdio: 'ignore' }); }
+  catch { throw new Error('The GitHub CLI (gh) is not installed or not signed in. Install it and run `gh auth login`, or merge locally instead.'); }
+  await stopRunner(id);
+  const base = plan.baseBranch ?? 'main';
+  git(plan.repo, 'push', '-u', 'origin', `${plan.branch}:${plan.branch}`);
+  const tasks = state.tasks.map((t, i) => `${i + 1}. ${t.title}${t.skipped ? ' (skipped)' : t.commit ? ` (${t.commit.slice(0, 8)})` : ''}`).join('\n');
+  const title = plan.brief.split(/(?<=\.)\s/)[0].slice(0, 100);
+  const body = `${plan.brief}\n\n## Tasks\n${tasks}\n\n## Checks\n${plan.checks.map(c => `- \`${c}\``).join('\n')}\n\n` +
+    `${plan.final?.review?.reason ? `## Final review\n${plan.final.review.reason}\n\n` : ''}Opened by Nightshift (plan \`${id}\`) after the owner approved it.`;
+  const output = execFileSync(gh, ['pr', 'create', '--base', base, '--head', plan.branch, '--title', title, '--body', body],
+    { cwd: plan.repo, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  const url = output.trim().split('\n').filter(line => /^https?:\/\//.test(line)).at(-1) ?? output.trim();
+  try { git(plan.repo, 'worktree', 'remove', plan.worktree); } catch {}
+  const store = new Store(dir);
+  store.acquire();
+  try {
+    const supervisor = new Supervisor(store, null, null);
+    supervisor.state.plan.status = 'pr-open';
+    supervisor.state.plan.pullRequest = url;
+    supervisor.record(null, 'pull-request-opened', `Pushed ${plan.branch} and opened ${url} into ${base}.`);
+    store.save(supervisor.state);
+  } finally { store.release(); }
+  return { url, base, branch: plan.branch };
+}
+
 // Removes a plan: a draft's directory; an unmerged plan's worktree, branch (its unmerged
 // commits are lost), and directory; or a merged plan's record (its work stays where it was
 // merged, and the branch goes only if the merge contains it). Without `confirm` it only
@@ -158,6 +199,14 @@ export function discardPlan(id, { confirm = false } = {}) {
   if (!plan && !readDraft(dir)) throw new Error(`No plan or draft named ${id}.`);
   if (state.runner?.alive) throw new Error(`Plan ${id} has a running runner (pid ${state.runner.pid}); stop it first with \`stop ${id}\`.`);
   const branchExists = Boolean(plan) && tryGit(plan.repo, 'rev-parse', '--verify', '--quiet', `refs/heads/${plan.branch}`) !== null;
+  if (plan?.status === 'pr-open') {
+    const removes = [`plan record ${dir}`, ...(branchExists ? [`local branch ${plan.branch} (the pull request and its remote branch stay on GitHub)`] : [])];
+    if (!confirm) return { removed: false, removes };
+    if (existsSync(plan.worktree)) tryGit(plan.repo, 'worktree', 'remove', '--force', plan.worktree);
+    if (branchExists) git(plan.repo, 'branch', '-D', plan.branch);
+    rmSync(dir, { recursive: true, force: true });
+    return { removed: true, removes };
+  }
   if (plan?.status === 'merged') {
     const contained = branchExists && plan.mergeCommit && tryGit(plan.repo, 'merge-base', '--is-ancestor', plan.branch, plan.mergeCommit) !== null;
     const removes = [`plan record ${dir}`, ...(contained ? [`branch ${plan.branch} (already merged)`] : [])];
@@ -181,6 +230,8 @@ export function discardPlan(id, { confirm = false } = {}) {
   return { removed: true, removes };
 }
 
+const queuePosition = id => { const at = readQueue().indexOf(id); return at < 0 ? null : at + 1; };
+
 // One line per plan for the CLI list and the app.
 export function summarize(id) {
   const dir = planDir(id);
@@ -191,7 +242,7 @@ export function summarize(id) {
     return draft ? { id, dir, status: 'draft', repo: draft.plan.repo, brief: draft.plan.brief, notes: draft.notes, rules: draft.rules ?? [],
       baseRef: draft.plan.baseRef ?? null, baseCommit: draft.plan.base ?? null, baseBranch: draft.plan.baseBranch ?? null,
       baseSubject: draft.baseInfo?.subject ?? null, baseDate: draft.baseInfo?.date ?? null, warnings: (draft.warnings ?? []).map(w => w.message),
-      agents: draft.agents, source: draft.source, tasks: draft.plan.tasks.map(t => ({ ...t, status: 'draft' })), runner: false } : null;
+      queued: queuePosition(id), agents: draft.agents, source: draft.source, tasks: draft.plan.tasks.map(t => ({ ...t, status: 'draft' })), runner: false } : null;
   }
   const dispatches = state.events.filter(e => e.type === 'dispatched').length;
   const tokens = state.events.filter(e => e.type === 'provider:usage')
@@ -201,12 +252,13 @@ export function summarize(id) {
   const blocked = state.tasks.find(t => t.status === 'blocked');
   const last = state.events.at(-1);
   return {
-    id, dir, status: plan.status, paused: state.paused, runner: Boolean(state.runner?.alive),
+    id, dir, status: plan.status, paused: state.paused, runner: Boolean(state.runner?.alive), waitUntil: state.waitUntil ?? null,
+    queued: queuePosition(id), runnerWanted: existsSync(join(dir, 'runner-wanted')),
     repo: plan.repo, branch: plan.branch, worktree: plan.worktree, agents: plan.agents ?? state.project?.pairing ?? null,
     baseRef: plan.baseRef ?? null, baseCommit: plan.baseCommit ?? null, baseBranch: plan.baseBranch ?? null,
     brief: plan.brief, startedAt: plan.startedAt, finishedAt: plan.finishedAt ?? null,
     blocker: plan.reason ?? blocked?.reason ?? null, current: current ? { id: current.id, title: current.title, status: current.status } : null,
-    finalReview: plan.final?.review?.reason ?? null,
+    finalReview: plan.final?.review?.reason ?? null, pullRequest: plan.pullRequest ?? null,
     rules: (plan.rules ?? []).map(r => [r.path, ...(r.also ?? [])].join(' = ')),
     tasks: state.tasks.map(t => ({ id: t.id, title: t.title, status: t.status, attempts: t.attempts, commit: t.commit ?? null, reason: t.reason ?? null,
       skipped: t.skipped === true, difficulty: t.difficulty ?? null, difficultyReason: plan.tasks?.find(p => p.id === t.id)?.difficultyReason ?? null, effort: t.effort ?? null })),
@@ -218,6 +270,23 @@ export function summarize(id) {
 }
 
 export const listPlans = () => listPlanIds().map(summarize).filter(Boolean);
+
+// At login (autostart) or on request: bring back every runner that was on and not stopped by
+// the owner, then start the queue if nothing is working.
+export async function resumeRunners() {
+  const started = [];
+  for (const id of listPlanIds()) {
+    const dir = planDir(id);
+    if (!existsSync(join(dir, 'runner-wanted'))) continue;
+    const state = Store.inspect(dir);
+    if (!state.plan || state.runner?.alive || ['merged', 'awaiting-approval'].includes(state.plan.status)) continue;
+    try { await startPlan(id); started.push(id); }
+    catch (error) { console.error(`${id}: ${error.message}`); }
+  }
+  const next = await advanceQueue(startPlan);
+  if (next) started.push(next);
+  return started;
+}
 
 // The owner's difficulty rating for one task: edits a draft directly, or queues the change
 // for a started plan (it applies from the task's next attempt).
@@ -236,4 +305,57 @@ export function setTaskDifficulty(id, taskId, level) {
   task.difficultyReason = `Set by the owner (was: ${task.difficultyReason ?? 'not rated'}).`;
   saveDraft(id, draft);
   return 'updated';
+}
+
+// The owner's edits to a draft before approving it: brief, checks, allowed paths, and the
+// task list (reworded, reordered, removed, or added). Validated like any plan; new tasks
+// without an id get one from their title.
+export function editDraft(id, changes) {
+  const dir = planDir(id);
+  const draft = readDraft(dir);
+  if (!draft) throw new Error(`${id} is not a draft; only drafts can be edited (a started plan takes new tasks with \`add\`).`);
+  const taken = new Set();
+  const slug = text => String(text).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'task';
+  const tasks = (changes.tasks ?? draft.plan.tasks).map(task => {
+    let taskId = task.id || slug(task.title);
+    for (let n = 2; taken.has(taskId); n += 1) taskId = `${slug(task.title)}-${n}`;
+    taken.add(taskId);
+    return { ...task, id: taskId };
+  });
+  const edited = { ...draft.plan, ...(changes.brief !== undefined ? { brief: changes.brief } : {}),
+    ...(changes.checks ? { checks: changes.checks.map(c => String(c).trim()).filter(Boolean) } : {}),
+    ...(changes.allowedPaths ? { allowedPaths: changes.allowedPaths.map(p => String(p).trim()) } : {}), tasks };
+  const valid = validatePlan(edited, edited.repo, `draft ${id}`);
+  // validatePlan recomputes the dispatch limit from the task count; keep the owner's other limits.
+  const plan = { ...valid, limits: { ...valid.limits, dispatches: 3 * valid.tasks.length + 2 } };
+  saveDraft(id, { ...draft, plan, editedAt: new Date().toISOString() });
+  return plan;
+}
+
+// A prompt for an interactive Claude session that helps the owner fix what blocked a plan.
+export function fixPrompt(id) {
+  const dir = planDir(id);
+  const state = Store.inspect(dir);
+  const plan = state.plan;
+  if (!plan) throw new Error(`${id} has not started; nothing to fix yet.`);
+  const task = state.tasks.find(t => t.status === 'blocked');
+  const checks = [...state.events].reverse().find(e => ['checks', 'baseline-checks', 'final-checks'].includes(e.type))?.detail;
+  const failing = (checks?.results ?? []).filter(r => r.exitCode !== 0).map(r => `$ ${r.command} -> exit ${r.exitCode}\n${r.output.slice(-3000)}`).join('\n\n');
+  const planLevel = !task;
+  const lines = [
+    `Nightshift plan "${id}" is stopped and needs the owner. Help them fix it.`,
+    '', `Plan: ${plan.brief}`, `Repository: ${plan.repo}`, `Plan branch: ${plan.branch} (worktree: ${plan.worktree})`,
+    `Allowed paths: ${plan.allowedPaths.map(p => p || '(whole repository)').join(', ')}`, `Checks: ${plan.checks.join('; ')}`, '',
+    task ? `Blocked task "${task.id}": ${task.title}\nDone when: ${task.acceptance}\nWhy it stopped: ${task.reason}`
+      : `Why the plan stopped: ${plan.reason ?? state.events.filter(e => e.type === 'plan-blocked').at(-1)?.detail ?? 'see nightshift report'}`,
+    ...(failing ? ['', 'Failing check output:', failing] : []), '',
+    'How to work:',
+    planLevel && plan.baseline && !plan.baseline.passed
+      ? `- The checks already fail where the plan starts (${plan.baseRef ?? plan.baseCommit}). That needs fixing in the project itself, on ${plan.baseBranch ?? 'its main branch'}, not in this worktree. Fix it there with the owner (their usual rules for commits and pushes apply), then they retry the plan in Nightshift.`
+      : `- You are in the plan's worktree on branch ${plan.branch}. Make the fix here, run the checks above, and explain what you changed.`,
+    '- Do not commit, push, switch branches, or rewrite history: Nightshift commits the result itself.',
+    task ? `- When the fix is ready, the owner presses "Accept Fix" in Nightshift (or runs: nightshift accept ${task.id} --plan ${id}). Nightshift runs the checks and, if they pass, commits it as this task and continues.`
+      : '- When it is fixed, the owner presses Retry in Nightshift.',
+  ];
+  return { id, cwd: planLevel && plan.baseline && !plan.baseline.passed ? plan.repo : plan.worktree, task: task?.id ?? null, prompt: lines.join('\n') };
 }
