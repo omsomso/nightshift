@@ -17,6 +17,8 @@ import { home, planDir, readConfig, writeConfig, freePlanId } from './home.js';
 import { installIntegration } from './install.js';
 import { chatTurn } from './chat.js';
 import { resolveBase, snapshot, listBranches, describeBase } from './base.js';
+import { checkReadiness, gitWarnings } from './readiness.js';
+import { readDraft } from './plans.js';
 import { listProjects, workspaceRoots } from './projects.js';
 import { spawnSync } from 'node:child_process';
 import { setTaskDifficulty } from './plans.js';
@@ -30,6 +32,9 @@ const usage = `Usage: node src/cli.js <command> [options]
         [--repo path] [--agents spec] [--request text] [--base ref] [--yes]
                                --base: start from this branch or commit (default: the fetched main branch)
   branches --repo path         Branches to start from, and the default (fetches origin) [--json]
+  check --repo path            Is the project ready? Where a plan would start, work it would leave out,
+        [--base ref] [--check cmd]... [--no-run] [--json]
+                               and whether the checks pass there (fresh worktree). Or: check --plan <draft-id>
   draft <doc> [same options]   Only draft the plan (review it, then \`start <id>\`)
   start <id> | stop <id>       Start or stop a plan's background runner
   providers [--json]           Installed versions, pins, sign-ins, and on/off for each provider
@@ -42,7 +47,8 @@ const usage = `Usage: node src/cli.js <command> [options]
   enable <provider>            Turn it back on
   list [--json]                All plans in ~/.nightshift/plans with progress
   logs <id> [--lines n]        Print the last n lines (default 40) of a plan's runner log
-  discard <id> --yes           Remove an unmerged plan: its draft, or its worktree, branch, and directory
+  discard <id> --yes           Remove a plan: a draft; an unmerged plan's worktree, branch, and directory;
+                               or a merged plan's record (its work stays merged)
   merge <id>                   Approve: merge a finished plan into the branch it started from (nothing is pushed)
 
   demo [state]                 Seed and run the simulated demo
@@ -70,7 +76,7 @@ const { values, positionals } = parseArgs({ allowPositionals: true, options: {
   id: { type: 'string' }, title: { type: 'string' }, acceptance: { type: 'string' }, after: { type: 'string' },
   'max-attempts': { type: 'string', default: '2' }, since: { type: 'string' }, help: { type: 'boolean' },
   plan: { type: 'string' }, 'no-fetch': { type: 'boolean' }, message: { type: 'string' }, session: { type: 'string' }, notes: { type: 'boolean' }, cwd: { type: 'string' }, 'with-rules': { type: 'boolean' }, steps: { type: 'string' }, request: { type: 'string' }, yes: { type: 'boolean' }, json: { type: 'boolean' },
-  lines: { type: 'string', default: '40' }, base: { type: 'string' }
+  lines: { type: 'string', default: '40' }, base: { type: 'string' }, check: { type: 'string', multiple: true }, 'no-run': { type: 'boolean' }
 } });
 const [command = 'status', argument] = positionals;
 // demo and status also accept the state directory positionally, as in earlier versions.
@@ -215,13 +221,19 @@ function setup() {
   for (const [path, result] of installIntegration(config)) console.log(`${result}: ${path}`);
 }
 
-function printDraft(id, { plan: draft, notes, agents }) {
+function printDraft(id, { plan: draft, notes, agents, warnings }) {
   console.log(`\nPlan ${id} for ${draft.repo} (${agents}), starting from ${draft.baseRef ?? draft.base}${draft.base ? ` @ ${draft.base.slice(0, 7)}` : ''}:\n${draft.brief}\n`);
   draft.tasks.forEach((task, i) => console.log(`  ${i + 1}. ${task.title}${task.difficulty ? `  [${task.difficulty}: ${task.difficultyReason ?? ''}]` : ''}\n     done when: ${task.acceptance}`));
   console.log(`\nChecks: ${draft.checks.join('; ')}\nAllowed paths: ${draft.allowedPaths.map(p => p || '(whole repository)').join(', ')}`);
   console.log(`Limits: ${draft.limits.attemptsPerTask} attempts per task, ${draft.limits.dispatches} dispatches, ` +
     `${draft.limits.tokens.toLocaleString('en-US')} tokens, ${draft.limits.hours} hours`);
   if (notes) console.log(`Planner notes: ${notes}`);
+  printWarnings(warnings);
+  console.log(`\nBefore starting, \`nightshift check --plan ${id}\` runs these checks at the starting commit.`);
+}
+
+function printWarnings(warnings = []) {
+  if (warnings.length) console.log(`\nLeft out of this plan:\n${warnings.map(w => `  ! ${w.message}`).join('\n')}`);
 }
 
 // Drafts a plan from a document with a read-only agent. Nothing runs until it is started.
@@ -239,7 +251,8 @@ async function draft() {
   console.error(`Drafting with ${planner.describe}, from ${describeBase(base)}…`);
   const drafted = await draftPlan({ session: planner.session, repo, root, doc, steps: values.steps, request: values.request, base });
   const id = freePlanId(drafted.plan.id);
-  const record = { ...drafted, plan: { ...drafted.plan, id }, agents, draftedAt: new Date().toISOString() };
+  const warnings = gitWarnings(repo, base);
+  const record = { ...drafted, plan: { ...drafted.plan, id }, agents, warnings, draftedAt: new Date().toISOString() };
   const dir = saveDraft(id, record);
   if (values.json) console.log(JSON.stringify({ id, dir, draft: record }));
   else printDraft(id, record);
@@ -357,9 +370,53 @@ function branches() {
   const repo = execFileSync('git', ['-C', resolve(values.repo), 'rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim();
   const base = resolveBase(repo, { fetch: !values['no-fetch'] });
   const list = listBranches(repo);
-  if (values.json) return console.log(JSON.stringify({ repo, default: base, branches: list }));
+  const warnings = gitWarnings(repo, base);
+  if (values.json) return console.log(JSON.stringify({ repo, default: base, branches: list, warnings }));
   console.log(`Default start: ${describeBase(base)}`);
+  printWarnings(warnings);
   for (const b of list) console.log(`  ${b.ref.padEnd(40)} ${b.date.slice(0, 16).replace('T', ' ')}  ${b.subject.slice(0, 60)}`);
+}
+
+// Readiness: where a plan would start, what it would leave out, and whether the checks pass
+// there. With --plan, a draft's own start commit and checks.
+async function check() {
+  let repo, base = values.base, checks = values.check, ref, branch, checkSource;
+  if (values.plan) {
+    const draft = readDraft(planDir(values.plan));
+    const plan = draft?.plan ?? Store.inspect(planDir(values.plan)).plan;
+    if (!plan) throw new Error(`No plan or draft named ${values.plan}.`);
+    repo = plan.repo;
+    if (!checks) { checks = plan.checks; checkSource = `plan ${values.plan}`; }
+    if (!base) { base = plan.base; ref = plan.baseRef; branch = plan.baseBranch; }
+  } else {
+    if (!values.repo) throw new Error('check requires --repo <path> or --plan <id>.');
+    repo = execFileSync('git', ['-C', resolve(values.repo), 'rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim();
+  }
+  const abort = new AbortController();
+  const stop = () => abort.abort(new Error('Stopped by the owner.'));
+  process.once('SIGINT', stop);
+  process.once('SIGTERM', stop);
+  const report = await checkReadiness(repo, { base, ref, branch, checks, checkSource, fetch: !values['no-fetch'], run: !values['no-run'], signal: abort.signal,
+    onCheck: ({ index, total, command }) => console.error(`Running check ${index + 1} of ${total}: ${command}`) });
+  if (abort.signal.aborted) throw abort.signal.reason;
+  if (values.json) return console.log(JSON.stringify(report));
+  console.log(`${repo}\nStarts from: ${describeBase(report.base)}${report.base.notes.length ? ` (${report.base.notes.join('; ')})` : ''}`);
+  printWarnings(report.warnings);
+  const { checks: c } = report;
+  if (!c.commands.length) console.log('\nNo checks known. Pass them with --check "<command>" (repeatable).');
+  else if (!c.ran) console.log(`\nChecks (${c.source}), not run: ${c.commands.join('; ')}`);
+  else {
+    console.log(`\nChecks (${c.source}):`);
+    for (const r of c.results) {
+      console.log(`  ${r.exitCode === 0 ? 'ok  ' : 'FAIL'} ${r.command} (${r.timedOut ? 'timed out' : `exit ${r.exitCode}`}, ${Math.round(r.durationMs / 1000)}s)`);
+      if (r.exitCode !== 0) console.log(r.output.trim().split('\n').slice(-20).map(line => `       ${line}`).join('\n'));
+    }
+  }
+  if (report.ready === true) console.log(`\nReady: the checks pass at ${report.base.ref} @ ${report.base.commit.slice(0, 7)}.${report.warnings.length ? ' Look at what is left out above.' : ''}`);
+  if (report.ready === false) {
+    console.log(`\nNot ready: the checks fail at ${report.base.ref} @ ${report.base.commit.slice(0, 7)}, so every task would fail them. Fix that branch (and push), or start from another with --base.`);
+    process.exitCode = 2;
+  }
 }
 
 function projects() {
@@ -382,7 +439,7 @@ function workspaces() {
 }
 
 const commands = {
-  demo, serve, add, plan, setup, draft, run, list, providers, login, chat, projects, workspaces, effort, branches,
+  demo, serve, add, plan, setup, draft, run, list, providers, login, chat, projects, workspaces, effort, branches, check,
   difficulty: () => {
     if (!values.plan || !argument || !positionals[2]) throw new Error('Use: difficulty <task-id> <low|medium|high> --plan <id>');
     console.log(setTaskDifficulty(values.plan, argument, positionals[2]) === 'queued' ? 'Queued: applies from the task\'s next attempt.' : 'Draft updated.');

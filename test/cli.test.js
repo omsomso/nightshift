@@ -94,7 +94,10 @@ test('discard removes a draft, or a started plan with its worktree and branch, o
   const dir = e.startedPlan('work');
   const worktree = join(dir, 'worktree');
   writeFileSync(join(worktree, 'notes', 'wip.txt'), 'unfinished\n');
+  git(worktree, 'add', '-A');
+  git(worktree, '-c', 'user.name=T', '-c', 'user.email=t@x', 'commit', '-q', '-m', 'accepted task');
   const preview = e.run('discard', 'work');
+  assert.match(preview.stderr, /1 commit not merged anywhere; it is lost/);
   assert.equal(preview.status, 1);
   assert.match(preview.stderr, /worktree .*worktree[\s\S]*branch nightshift\/work[\s\S]*directory/);
   assert.equal(existsSync(worktree), true);
@@ -105,7 +108,7 @@ test('discard removes a draft, or a started plan with its worktree and branch, o
   assert.equal(e.run('discard', 'work', '--yes').status, 1, 'unknown plans are refused');
 });
 
-test('discard refuses while the runner is alive and refuses merged plans', t => {
+test('discard refuses while the runner is alive; a merged plan loses only its record and merged branch', t => {
   const e = setupEnv(t);
   const live = e.startedPlan('live');
   patchState(live, { lease: process.pid });
@@ -115,11 +118,15 @@ test('discard refuses while the runner is alive and refuses merged plans', t => 
   assert.equal(existsSync(join(live, 'worktree')), true);
 
   const merged = e.startedPlan('shipped');
-  patchState(merged, { plan: { status: 'merged' } });
-  const kept = e.run('discard', 'shipped', '--yes');
-  assert.equal(kept.status, 1);
-  assert.match(kept.stderr, /is merged/);
-  assert.match(git(e.repo, 'branch', '--list', 'nightshift/shipped'), /nightshift\/shipped/);
+  const main = git(e.repo, 'rev-parse', 'main');
+  patchState(merged, { plan: { status: 'merged', mergeCommit: main } });
+  const preview = e.run('discard', 'shipped');
+  assert.match(preview.stderr, /plan record[\s\S]*branch nightshift\/shipped \(already merged\)/);
+  assert.doesNotMatch(preview.stderr, /lost/);
+  e.cli('discard', 'shipped', '--yes');
+  assert.equal(existsSync(merged), false);
+  assert.equal(git(e.repo, 'branch', '--list', 'nightshift/shipped'), '');
+  assert.equal(git(e.repo, 'rev-parse', 'main'), main, 'the merged work stays');
 });
 
 test('limit rejects unknown names at once and queues known ones', t => {

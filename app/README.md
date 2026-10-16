@@ -52,4 +52,20 @@ shows questions one at a time as option rows (explanation, Recommended badge, nu
 Back/Next), animates messages, shows a typing indicator, has a Stop button (⌘.) that ends
 Claude's turn, and a "Starts from" branch picker. The demo and busy states were
 screenshotted (`NIGHTSHIFT_STUDIO_DEMO=1` or `=busy`); Stop and the picker against a live
-turn were not clicked through on screen.
+turn were not clicked through on screen. Drafts show work the plan leaves out and have a
+Check Readiness button (`check --plan <id> --json`, stoppable) that shows each check's
+result and the tail of a failing one; Plan Studio lists left-out work under Starts from.
+The draft view was rendered offscreen and the check's JSON decoded by the app's types; the
+button was not clicked on screen. 2026-10-16: any plan can be deleted from the app
+(Delete… in the plan view, right-click in the sidebar, or the Delete key), with a
+confirmation that says what is lost; it runs `stop` if needed, then `discard --yes`. The
+button was screenshotted and its command run on a fixture plan; the confirmation dialog
+was not clicked on screen. 2026-10-16 (later): the plan view is organized in sections: a
+header (status pill and a ⋯ menu with Open Worktree, Open Repository, Show Report, Delete),
+a colored "next step" panel that says what the plan needs and holds its main buttons,
+then Before you start (drafts), Overview, Tasks (progress bar, current task highlighted),
+Limits, and a collapsed Runner log. Plan Studio's roadmap shows its revision, who changed
+it and when, lines added and removed, flashes on each change, notes it in the chat, and
+offers Restore Previous; edits you make go to Claude with your next message. Draft,
+ready-to-merge, and Studio views were screenshotted; the blocked and running panels were
+not (no such plan was available).

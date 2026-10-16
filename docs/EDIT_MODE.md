@@ -56,6 +56,14 @@ in the worktree where it is checked out (which must be clean), else in a tempora
 worktree; a missing local branch is created from the ref. Conflicts abort cleanly and
 nothing is pushed.
 
+`check` (`src/readiness.js`) runs the same checks a plan's baseline will, earlier: in a
+fresh detached worktree at the start commit under `~/.nightshift/checks/`, removed
+afterwards. Without `--check` it uses the checks of the repository's latest plan or draft,
+else a detected test command (npm, cargo, go, make, SwiftPM, pytest). Like plan checks,
+these commands are not sandboxed. It also reports work left out: local commits on the base
+branch that its remote lacks, checkout commits not in the base, uncommitted changes, and
+branches changed in the last three days with commits the base lacks.
+
 ## Project rules
 
 Nightshift's sandboxed agents do not load project instructions on their own (Claude's

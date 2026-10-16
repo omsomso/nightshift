@@ -62,9 +62,10 @@ export class Workspace {
   }
 
   // Runs the plan's checks in the worktree, one at a time, each with a timeout.
-  async runChecks({ signal } = {}) {
+  async runChecks({ signal, onCheck } = {}) {
     const results = [];
-    for (const command of this.checks) {
+    for (const [index, command] of this.checks.entries()) {
+      onCheck?.({ index, total: this.checks.length, command });
       const started = Date.now();
       const result = await new Promise(resolve => {
         const child = spawn('/bin/sh', ['-c', command], { cwd: this.worktree, stdio: ['ignore', 'pipe', 'pipe'], detached: true });

@@ -101,6 +101,7 @@ final class StudioModel {
     var baseRef: String?
     var defaultBase: BaseInfo?
     var branches: [BaseInfo] = []
+    var warnings: [GitWarning] = []
     var loadingBranches = false
     var messages: [ChatMessage] = []
     var questions: [InterviewQuestion] = []
@@ -110,6 +111,16 @@ final class StudioModel {
     var session: String?
     var input = ""
     var document = ""
+    // Roadmap history: each version Claude (or an opened file) supplies is a revision.
+    var revision = 0
+    var updatedAt: Date?
+    var updatedBy: String?
+    var linesAdded = 0
+    var linesRemoved = 0
+    var previousDocument: String?
+    // The last version Claude has seen; owner edits since then go along with the next message.
+    private var syncedDocument = ""
+    var ownerEdited: Bool { !document.isEmpty && document != syncedDocument }
     var documentPath = "docs/plans/plan.md"
     var pathEdited = false
     var busy: String?
@@ -138,7 +149,7 @@ final class StudioModel {
         repo = path
         pickedByAgent = byAgent && path != nil
         guard changed else { return }
-        rulesSent = false; baseRef = nil; defaultBase = nil; branches = []
+        rulesSent = false; baseRef = nil; defaultBase = nil; branches = []; warnings = []
         if path != nil { Task { await loadBranches() } }
     }
 
@@ -150,6 +161,7 @@ final class StudioModel {
               let list = try? JSONDecoder().decode(BranchList.self, from: Data(output.utf8)), self.repo == repo else { return }
         defaultBase = list.default
         branches = list.branches
+        withAnimation { warnings = list.warnings ?? [] }
     }
 
     func startInterview() async {
@@ -179,10 +191,17 @@ final class StudioModel {
     func send(_ text: String) async {
         guard let session, !text.isEmpty else { return }
         append(ChatMessage(role: .owner, text: text))
+        var outgoing = text
+        if ownerEdited {
+            // Claude only knows the versions it wrote; send the owner's edits so the next revision builds on them.
+            outgoing += "\n\nI edited the roadmap. Build on this version, not your previous one:\n```markdown\n\(document)\n```"
+            syncedDocument = document
+            append(ChatMessage(role: .note, text: "Your roadmap edits were sent along."))
+        }
         withAnimation { questions = []; questionIndex = 0 }
         answers = [:]
         otherAnswers = [:]
-        var arguments = ["chat", "--session", session, "--message", text]
+        var arguments = ["chat", "--session", session, "--message", outgoing]
         if let cwd { arguments += ["--cwd", cwd] }
         // The project goes along on every turn so Claude keeps reading the plan's starting point.
         if let repo {
@@ -219,7 +238,7 @@ final class StudioModel {
                 questionIndex = 0
             }
             if let document = reply.document {
-                withAnimation { self.document = document }
+                applyDocument(document, by: "Claude")
                 if !pathEdited { documentPath = "docs/plans/\(Self.slug(for: document)).md" }
             }
             error = nil
@@ -229,10 +248,49 @@ final class StudioModel {
         }
     }
 
+    // A new roadmap version: counted, timed, flashed in the pane, and noted in the chat.
+    func applyDocument(_ new: String, by source: String) {
+        // A version from a file is news to Claude; it goes along with the next message.
+        if source == "Claude" { syncedDocument = new }
+        guard new != document else {
+            if source == "Claude" { append(ChatMessage(role: .note, text: "Roadmap checked: no changes (revision \(revision)).")) }
+            return
+        }
+        let old = document.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        let fresh = new.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        var remaining = Dictionary(old.map { ($0, 1) }, uniquingKeysWith: +)
+        var added = 0
+        for line in fresh { if let n = remaining[line], n > 0 { remaining[line] = n - 1 } else { added += 1 } }
+        linesAdded = added
+        linesRemoved = remaining.values.reduce(0, +)
+        previousDocument = document.isEmpty ? nil : document
+        withAnimation { document = new }
+        revision += 1
+        updatedAt = Date()
+        updatedBy = source
+        append(ChatMessage(role: .note, text: revision == 1 ? "Roadmap written (revision 1)." : "Roadmap updated: revision \(revision), +\(linesAdded) −\(linesRemoved) lines."))
+    }
+
+    func restorePrevious() {
+        guard let previous = previousDocument else { return }
+        previousDocument = document
+        withAnimation { document = previous }
+        updatedAt = Date()
+        updatedBy = "you (restored)"
+    }
+
+    // The owner typed in the roadmap.
+    func noteOwnerEdit() {
+        guard ownerEdited, updatedBy != "you" || (updatedAt.map { Date().timeIntervalSince($0) > 5 } ?? true) else { return }
+        updatedAt = Date()
+        updatedBy = "you"
+    }
+
     func startOver() {
         stop()
         withAnimation { phase = .intake }
         messages = []; questions = []; session = nil; cwd = nil; document = ""; error = nil
+        revision = 0; updatedAt = nil; updatedBy = nil; previousDocument = nil; syncedDocument = ""
         if pickedByAgent { setRepository(nil, byAgent: false) }
         rulesSent = false; pathEdited = false
     }
@@ -243,7 +301,7 @@ final class StudioModel {
         if let repo { panel.directoryURL = URL(fileURLWithPath: repo) }
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
-            document = try String(contentsOf: url, encoding: .utf8)
+            applyDocument(try String(contentsOf: url, encoding: .utf8), by: "the file")
             if let root = Self.gitRoot(of: url.deletingLastPathComponent()) {
                 setRepository(root, byAgent: false)
                 documentPath = String(url.path.dropFirst(root.count + 1))
@@ -294,6 +352,7 @@ final class StudioModel {
         pickedByAgent = true
         session = "demo"
         defaultBase = BaseInfo(ref: "origin/main", commit: "35cfda769a29", subject: "Merge pull request #33", date: nil)
+        warnings = [GitWarning(kind: "unpushed", message: "Local main has 2 commits that origin/main does not; the plan will not include them.")]
         messages = [
             ChatMessage(role: .owner, text: "reverb tail clicks when bypassing\npreset browser should remember last folder\nCPU spikes when resizing the UI"),
             ChatMessage(role: .assistant, text: "These notes are about **VSTS**. I read the bypass path in the reverb processor and the preset browser. A few questions before I write the roadmap:")
@@ -313,6 +372,10 @@ final class StudioModel {
         ]
         answers = ["How should bypass handle the reverb tail?": ["Short crossfade"]]
         document = "# VSTS fixes: bypass, presets, resizing\n\nCovers three owner notes; leaves preset tagging for later.\n\n1. Crossfade the reverb on bypass...\n2. Remember the preset browser folder...\n3. Throttle repaints while resizing...\n"
+        syncedDocument = document
+        revision = 2; updatedAt = Date().addingTimeInterval(-95); updatedBy = "Claude"; linesAdded = 4; linesRemoved = 1
+        previousDocument = "# VSTS fixes\n"
+        messages.append(ChatMessage(role: .note, text: "Roadmap updated: revision 2, +4 −1 lines."))
         documentPath = "docs/plans/vsts-fixes-bypass-presets-resizing.md"
         if ProcessInfo.processInfo.environment["NIGHTSHIFT_STUDIO_DEMO"] == "busy" { busy = "Thinking"; questions = [] }
     }
@@ -323,6 +386,7 @@ struct StudioView: View {
     @Environment(\.dismissWindow) private var dismissWindow
     @State private var studio = StudioModel()
     @State private var confirmOverwrite = false
+    @State private var flash = false
 
     var body: some View {
         Group {
@@ -397,7 +461,10 @@ struct StudioView: View {
                         if studio.repo == nil {
                             Text("The project's main branch, latest from its remote").foregroundStyle(.secondary)
                         } else {
-                            basePicker
+                            VStack(alignment: .leading, spacing: 6) {
+                                basePicker
+                                if studio.baseRef == nil { LeftOutList(warnings: studio.warnings) }
+                            }
                         }
                     }
                     GridRow {
@@ -450,6 +517,10 @@ struct StudioView: View {
             .animation(.easeInOut, value: studio.repo)
             Button("Change…") { studio.chooseRepository() }
             if studio.repo != nil { basePicker }
+            if studio.baseRef == nil, !studio.warnings.isEmpty {
+                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                    .help("Left out of this plan:\n" + studio.warnings.map(\.message).joined(separator: "\n"))
+            }
             Spacer()
             AgentRolesPicker(roles: $studio.roles)
             Button("Start Over") { studio.startOver() }
@@ -528,7 +599,35 @@ struct StudioView: View {
     private var documentPane: some View {
         @Bindable var studio = studio
         return VStack(alignment: .leading, spacing: 10) {
-            Text("Roadmap").font(.headline)
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text("Roadmap").font(.headline)
+                if studio.revision > 0 {
+                    Text("Revision \(studio.revision)").font(.caption.weight(.semibold))
+                        .padding(.horizontal, 7).padding(.vertical, 2)
+                        .background(Capsule().fill(Color.accentColor.opacity(flash ? 0.45 : 0.15)))
+                        .contentTransition(.numericText())
+                }
+                Spacer()
+                if studio.previousDocument != nil {
+                    Button("Restore Previous") { studio.restorePrevious() }.buttonStyle(.link).font(.caption)
+                        .help("Put back the version before the last change (press again to return).")
+                }
+            }
+            if let at = studio.updatedAt, let by = studio.updatedBy {
+                TimelineView(.periodic(from: .now, by: 15)) { _ in
+                    HStack(spacing: 6) {
+                        Image(systemName: by == "Claude" ? "sparkles" : "pencil").foregroundStyle(.secondary)
+                        Text("Updated by \(by) \(Self.relative(at))")
+                        if by == "Claude" || by == "the file", studio.revision > 1 {
+                            Text("+\(studio.linesAdded)").foregroundStyle(.green)
+                            Text("−\(studio.linesRemoved)").foregroundStyle(.red)
+                        }
+                        if studio.ownerEdited && by != "Claude" { Text("· sent with your next message").foregroundStyle(.secondary) }
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+            }
             HStack(spacing: 6) {
                 Text("Save as").foregroundStyle(.secondary)
                 TextField("docs/plans/plan.md", text: $studio.documentPath)
@@ -541,7 +640,8 @@ struct StudioView: View {
                     .scrollContentBackground(.hidden)
                     .padding(8)
                     .background(RoundedRectangle(cornerRadius: 8).fill(Color(nsColor: .textBackgroundColor)))
-                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.secondary.opacity(0.25)))
+                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(flash ? Color.accentColor : Color.secondary.opacity(0.25), lineWidth: flash ? 2 : 1))
+                    .onChange(of: studio.document) { _, _ in studio.noteOwnerEdit() }
                 if studio.document.isEmpty {
                     Text("The roadmap appears here once Claude has what it needs. You can edit it before saving.")
                         .foregroundStyle(.tertiary).padding(16).allowsHitTesting(false)
@@ -549,6 +649,17 @@ struct StudioView: View {
             }
         }
         .padding(20)
+        .onChange(of: studio.revision) { _, _ in
+            withAnimation(.easeOut(duration: 0.2)) { flash = true }
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(1.2))
+                withAnimation(.easeOut(duration: 0.8)) { flash = false }
+            }
+        }
+    }
+
+    static func relative(_ date: Date) -> String {
+        Date().timeIntervalSince(date) < 30 ? "just now" : date.formatted(.relative(presentation: .named))
     }
 
     private var footer: some View {
@@ -728,6 +839,21 @@ struct OptionRow: View {
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
         .animation(.easeOut(duration: 0.12), value: hovering)
+    }
+}
+
+// Work the plan would leave out: unpushed, unmerged, or uncommitted.
+struct LeftOutList: View {
+    let warnings: [GitWarning]
+
+    var body: some View {
+        ForEach(warnings, id: \.self) { warning in
+            Label(warning.message, systemImage: "exclamationmark.triangle.fill")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .symbolRenderingMode(.multicolor)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 }
 
