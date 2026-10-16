@@ -28,6 +28,7 @@ struct Plan: Decodable, Identifiable, Hashable {
     let baseCommit: String?
     let baseBranch: String?
     let baseSubject: String?
+    let warnings: [String]?
     let tasks: [PlanTask]
     let limits: Limits?
     let lastEvent: LastEvent?
@@ -290,14 +291,42 @@ final class AppModel {
         }
     }
 
-    func deleteDraft(_ plan: Plan) {
-        guard plan.status == "draft" else { return }
+    // Removes a plan through `discard`: a draft, an unmerged plan with its worktree and branch
+    // (its runner is stopped first), or a merged plan's record. Asked for by `pendingDelete`.
+    var pendingDelete: Plan?
+
+    func discard(_ plan: Plan) async {
+        busy.insert(plan.id)
+        defer { busy.remove(plan.id) }
         do {
-            try FileManager.default.removeItem(atPath: plan.dir)
+            if plan.runner { _ = try await CLI.load().run(["stop", plan.id]) }
+            _ = try await CLI.load().run(["discard", plan.id, "--yes"])
             if selection == plan.id { selection = nil }
-            Task { await refresh() }
+            errorMessage = nil
         } catch {
             errorMessage = error.localizedDescription
+        }
+        await refresh()
+    }
+
+    static func deleteTitle(_ plan: Plan) -> String {
+        switch plan.status {
+        case "draft": "Delete Draft"
+        case "merged": "Remove Plan"
+        default: "Delete Plan and Its Work"
+        }
+    }
+
+    static func deleteMessage(_ plan: Plan) -> String {
+        switch plan.status {
+        case "draft":
+            return "Only the drafted plan is removed. Nothing was started."
+        case "merged":
+            return "Nightshift forgets this plan. Its work stays merged into \(plan.baseBranch ?? "the branch it started from"); the plan branch is deleted only if that merge contains it."
+        default:
+            let done = plan.doneCount
+            let work = done == 0 ? "" : " That includes \(done) accepted task\(done == 1 ? "" : "s") not merged anywhere."
+            return "Removes the plan's worktree, its branch \(plan.branch ?? ""), and its record.\(work) This cannot be undone." + (plan.runner ? " Its runner is stopped first." : "")
         }
     }
 
@@ -377,4 +406,33 @@ struct BranchList: Decodable {
     let repo: String
     let `default`: BaseInfo
     let branches: [BaseInfo]
+    let warnings: [GitWarning]?
+}
+
+// Work a plan would leave out (unpushed, unmerged, or uncommitted).
+struct GitWarning: Decodable, Hashable {
+    let kind: String
+    let message: String
+}
+
+// `nightshift check --json`: is the project ready for a plan?
+struct Readiness: Decodable, Hashable {
+    struct Checks: Decodable, Hashable {
+        let source: String
+        let commands: [String]
+        let ran: Bool
+        let passed: Bool?
+        let results: [CheckResult]
+    }
+    struct CheckResult: Decodable, Hashable {
+        let command: String
+        let exitCode: Int?
+        let timedOut: Bool
+        let durationMs: Int
+        let output: String
+    }
+    let base: BaseInfo
+    let warnings: [GitWarning]
+    let checks: Checks
+    let ready: Bool?
 }

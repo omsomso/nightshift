@@ -44,6 +44,12 @@ the local main branch. The planner reads a snapshot of exactly that commit
 (`~/.nightshift/snapshots/`), and `merge` merges into that same branch (`main`) wherever it
 is checked out, or in a temporary worktree if it is not. Nothing is ever pushed.
 `--base` picks another branch, tag, or commit; `branches --repo <path>` lists candidates.
+`check` answers "is this project ready?" while you are still there: it lists work a plan
+would leave out (unpushed commits, unmerged recent branches, uncommitted changes) and runs
+the checks in a fresh worktree at the start commit (exit code 2 when they fail). Drafts
+record the same warnings. A Claude or Codex chat in the project is a good place to start a
+plan: it can merge, fix, and push what a plan needs (with your agreement), then check and
+draft.
 Set `"defaultBase": "local"` (local main branch) or `"head"` (the checkout, the old
 behavior) in `~/.nightshift/config.json` to change the default.
 
@@ -53,18 +59,24 @@ Commands for plans (`node src/cli.js --help` lists them all):
 node src/cli.js run docs/PLAN.md --base v1.2           # start from a tag, branch, or commit instead of origin's main branch
 node src/cli.js draft docs/PLAN.md --base main~3       # only draft; the exact commit and the ref are recorded in the plan
 node src/cli.js branches --repo ../VSTS                # where a plan would start, and recent branches to choose from
+node src/cli.js check --repo ../VSTS                   # ready? what a plan would leave out, and the checks at that commit
+node src/cli.js check --plan <id>                      # a draft's own checks at its start commit, before you start it
 node src/cli.js start <id>                             # start (or `stop <id>`) a plan's background runner
 node src/cli.js list                                   # all plans; `now:` names the task running or in review
 node src/cli.js logs <id> --lines 100                  # tail of the runner's serve.log (default 40 lines)
 node src/cli.js report --plan <id>                     # Markdown report: each task's attempts and latest checks
 node src/cli.js report --plan <id> --json              # one plan's summary, as one entry of `list --json`
 node src/cli.js limit tokens 8000000 --plan <id>       # change a limit; unknown names are refused at once
-node src/cli.js discard <id> --yes                     # remove an unmerged plan: its worktree, branch, and directory
+node src/cli.js discard <id> --yes                     # remove a plan (unmerged: worktree, branch, directory; merged: its record)
 node src/cli.js merge <id>                             # approve: merge the plan's branch into the branch it started from
 ```
 
-`discard` without `--yes` only lists what it would remove. It refuses while the
-plan's runner is alive (stop it first) and refuses merged plans. Plan checks may not
+`discard` without `--yes` only lists what it would remove, including how many accepted
+commits on an unmerged plan's branch would be lost. It refuses while the plan's runner is
+alive (stop it first). For a merged plan it removes only the record, and the plan branch
+when the merge contains it; the merged work stays. In the app: Delete… in a plan's view,
+the sidebar's right-click menu, or the Delete key (each asks first, and stops a running
+runner before deleting). Plan checks may not
 run `git push`, `git commit`, `git reset`, or `git rebase`.
 
 To save one provider's usage, turn it off: `node src/cli.js disable codex` (undo with
@@ -166,6 +178,7 @@ for you to merge. See `docs/EDIT_MODE.md`.
 - `test/service.test.js`: store, lease, command, serve-loop, and report tests.
 - `test/edit.test.js`: edit-mode cycle, gates, limits, final review, and serve end to end.
 - `src/base.js`: where a plan starts (fetched default branch, `--base`), branch listing, and planning snapshots.
+- `src/readiness.js`: `check`: work a plan would leave out, known or detected checks, and a check run at the start commit.
 - `test/run.test.js`: setup pins, draft → background run → merge, `--base`, starting from a remote that is ahead, and runner stop.
 - `test/cli.test.js`: `logs`, `discard`, limit names, `list` now line, report task detail, and `report --json`.
 - `test/codex.test.js`, `test/claude.test.js`: subprocess protocol and persisted session tests.

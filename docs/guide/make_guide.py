@@ -289,9 +289,9 @@ s += [PageBreak(), P('Run a plan from your docs', h1),
              ['--yes', 'Skip the confirmation question (for scripts).']], [38 * mm, FULL - 38 * mm], mono_first=True),
       P('Before you start', h2),
       *bullets([
-          '<b>Checks must pass today.</b> Nightshift runs them after every task; if they already fail, every task will.',
+          '<b>Checks must pass where the plan starts.</b> ' + m('nightshift check --repo PATH') + ' runs them at that exact commit and lists work the plan would leave out. After drafting, ' + m('check --plan ID') + ' (or Check Readiness in the app) runs the draft\'s own checks.',
           '<b>Install dependencies first.</b> Agents have no network, so they cannot install packages.',
-          '<b>Merge the work it needs.</b> The plan starts from the latest main branch on the remote; unmerged branches and uncommitted changes are not included.',
+          '<b>Merge the work it needs.</b> The plan starts from the latest main branch on the remote; unmerged branches and uncommitted changes are not included. A Claude chat in the project can do this preparation, then check and draft.',
           '<b>Draft without starting:</b> ' + m('nightshift draft &lt;doc&gt;') + ', look it over, then '
           + m('nightshift start &lt;id&gt;') + '.',
       ])]
@@ -312,7 +312,7 @@ s += [PageBreak(), P('Follow and control a plan', h1),
              ['limit NAME VALUE --plan ID', 'Raise or lower a limit, for example ' + m('limit tokens 8000000') + '.'],
              ['stop ID / start ID', 'Stop the background runner after its current step, or start it again.'],
              ['merge ID', 'Your approval: merge the finished branch into the branch it started from (main). Nothing is pushed.'],
-             ['discard ID --yes', 'Throw away an unmerged plan: its worktree, its branch, and its folder.']],
+             ['discard ID --yes', 'Throw away a plan: an unmerged one with its worktree, branch, and folder; a merged one only leaves the list (its work stays merged).']],
             [58 * mm, FULL - 58 * mm], mono_first=True),
       P('What the statuses mean', h2),
       table([['Status', 'Meaning', 'What to do'],
@@ -342,14 +342,14 @@ s += [PageBreak(), P('The Nightshift app', h1),
       P('What you can do in it', h2),
       table([['Where', 'What'],
              ['Sidebar', 'Every plan with a status icon and progress (for example 4/10).'],
-             ['Plan view', 'The brief, repository, branch, agents, runner state, each task with its "done when" criteria, '
-              'commits, blockers in red, the final review, limits as bars, and the last log lines.'],
+             ['Plan view', 'A next-step panel at the top says what the plan needs and holds its main buttons. Below: Before you start '
+              '(drafts), Overview, Tasks with progress, Limits, and the runner log. The ⋯ menu opens folders, the report, or Delete.'],
              ['Buttons', 'Approve and Start (drafts, with Works / Reviews pickers), Pause / Resume, Stop Turn, Start / Stop Runner, Retry, Open Worktree, '
-              'Report, and Approve and Merge (with a confirmation).'],
-             ['Plan Studio', 'New Plan (+). Paste your notes, quick and messy, and press Start Interview. Claude finds the project in '
-              'your workspace, reads its code and rules (it cannot change anything), asks questions one at a time (each choice explained, one marked Recommended; '
-              'click, press 1 to 9, or use your own words), shows where the plan will start (change it with Starts from), lets you Stop a turn, and writes the roadmap on the right, where you can edit it. Pick who works and who reviews. '
-              'Save and Draft Plan writes it into the project and drafts the plan; nothing runs until you press Approve and Start.'],
+              'Report, Approve and Merge, and Delete (each with a confirmation; also right-click a plan in the sidebar).'],
+             ['Plan Studio', 'New Plan (+). Paste quick notes and press Start Interview. Claude finds the project, reads it (read-only), '
+              'asks one question at a time (choices explained, one Recommended; press 1 to 9), and writes the roadmap on the right. '
+              'Each revision is numbered and timed; your edits go to Claude with your next message. Stop ends a turn; Starts from picks '
+              'the branch. Save and Draft Plan drafts it; nothing runs until Approve and Start.'],
              ['Accounts', 'Cmd-comma. Each provider\'s version, sign-in (a Sign In button opens your browser; subscription only), '
               'an on/off switch, and Run Setup.'],
              ['Menu bar', 'The moon icon lists plans and opens the window. It fills in when a plan needs you.'],

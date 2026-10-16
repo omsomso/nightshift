@@ -14,6 +14,7 @@ import { readConfig } from './home.js';
 
 const cliFile = fileURLToPath(new URL('./cli.js', import.meta.url));
 const git = (cwd, ...args) => execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+const tryGit = (cwd, ...args) => { try { return git(cwd, ...args); } catch { return null; } };
 
 // Plan lifecycle shared by the CLI and the app: draft → start → (runner) → merge.
 
@@ -146,22 +147,34 @@ export async function mergePlan(id) {
   return { target, merged, branch };
 }
 
-// Removes an unmerged plan: a draft's directory, or a started plan's worktree, branch, and
-// directory. Without `confirm` it only describes what it would remove.
+// Removes a plan: a draft's directory; an unmerged plan's worktree, branch (its unmerged
+// commits are lost), and directory; or a merged plan's record (its work stays where it was
+// merged, and the branch goes only if the merge contains it). Without `confirm` it only
+// describes what it would remove.
 export function discardPlan(id, { confirm = false } = {}) {
   const dir = planDir(id);
   const state = Store.inspect(dir);
   const plan = state.plan;
   if (!plan && !readDraft(dir)) throw new Error(`No plan or draft named ${id}.`);
   if (state.runner?.alive) throw new Error(`Plan ${id} has a running runner (pid ${state.runner.pid}); stop it first with \`stop ${id}\`.`);
-  if (plan?.status === 'merged') throw new Error(`Plan ${id} is merged; it cannot be discarded.`);
-  const removes = plan ? [`worktree ${plan.worktree}`, `branch ${plan.branch} in ${plan.repo}`, `directory ${dir}`] : [`draft directory ${dir}`];
-  if (!confirm) return { removed: false, removes };
+  const branchExists = Boolean(plan) && tryGit(plan.repo, 'rev-parse', '--verify', '--quiet', `refs/heads/${plan.branch}`) !== null;
+  if (plan?.status === 'merged') {
+    const contained = branchExists && plan.mergeCommit && tryGit(plan.repo, 'merge-base', '--is-ancestor', plan.branch, plan.mergeCommit) !== null;
+    const removes = [`plan record ${dir}`, ...(contained ? [`branch ${plan.branch} (already merged)`] : [])];
+    if (!confirm) return { removed: false, removes };
+    if (existsSync(plan.worktree)) tryGit(plan.repo, 'worktree', 'remove', '--force', plan.worktree);
+    if (contained) git(plan.repo, 'branch', '-D', plan.branch);
+    rmSync(dir, { recursive: true, force: true });
+    return { removed: true, removes };
+  }
+  const unmerged = branchExists ? Number(tryGit(plan.repo, 'rev-list', '--count', `${plan.baseCommit ?? plan.base}..${plan.branch}`) ?? 0) : 0;
+  const removes = plan ? [`worktree ${plan.worktree}`,
+    `branch ${plan.branch} in ${plan.repo}${unmerged ? ` (${unmerged} commit${unmerged === 1 ? '' : 's'} not merged anywhere; ${unmerged === 1 ? 'it is' : 'they are'} lost)` : ''}`,
+    `directory ${dir}`] : [`draft directory ${dir}`];
+  if (!confirm) return { removed: false, removes, unmerged };
   if (plan) {
     if (existsSync(plan.worktree)) git(plan.repo, 'worktree', 'remove', '--force', plan.worktree);
     else git(plan.repo, 'worktree', 'prune');
-    let branchExists = true;
-    try { git(plan.repo, 'rev-parse', '--verify', '--quiet', `refs/heads/${plan.branch}`); } catch { branchExists = false; }
     if (branchExists) git(plan.repo, 'branch', '-D', plan.branch);
   }
   rmSync(dir, { recursive: true, force: true });
@@ -177,7 +190,7 @@ export function summarize(id) {
   if (!plan) {
     return draft ? { id, dir, status: 'draft', repo: draft.plan.repo, brief: draft.plan.brief, notes: draft.notes, rules: draft.rules ?? [],
       baseRef: draft.plan.baseRef ?? null, baseCommit: draft.plan.base ?? null, baseBranch: draft.plan.baseBranch ?? null,
-      baseSubject: draft.baseInfo?.subject ?? null, baseDate: draft.baseInfo?.date ?? null,
+      baseSubject: draft.baseInfo?.subject ?? null, baseDate: draft.baseInfo?.date ?? null, warnings: (draft.warnings ?? []).map(w => w.message),
       agents: draft.agents, source: draft.source, tasks: draft.plan.tasks.map(t => ({ ...t, status: 'draft' })), runner: false } : null;
   }
   const dispatches = state.events.filter(e => e.type === 'dispatched').length;

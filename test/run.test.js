@@ -263,6 +263,9 @@ test('by default a plan starts from the fetched main branch, not the checkout, a
   assert.equal(git(e.repo, 'branch', '--show-current'), 'old-feature', 'the checkout was not switched');
   assert.match(git(e.repo, 'log', '-1', '--format=%s', 'main'), /Merge Nightshift plan/);
   assert.equal(git(e.repo, 'rev-parse', 'old-feature~0'), git(e.repo, 'rev-parse', 'HEAD'));
+  // The merge is local only, so the next plan would leave it out until it is pushed.
+  const after = JSON.parse(e.cli('branches', '--repo', e.repo, '--json', '--no-fetch'));
+  assert.ok(after.warnings.some(w => w.kind === 'unpushed' && /Local main has \d+ commits? that origin\/main does not/.test(w.message)));
 });
 
 test('stopping a chat turn ends the Claude process and the command at once', async t => {
@@ -282,4 +285,41 @@ test('stopping a chat turn ends the Claude process and the command at once', asy
   assert.match(stderr, /Stopped by the owner/);
   // The stopped Claude process may need a moment to exit.
   await until(() => !spawnSync('pgrep', ['-f', 'take your time'], { encoding: 'utf8' }).stdout.trim(), 2000);
+});
+
+test('check reports where a plan would start, what it leaves out, and whether the checks pass there', async t => {
+  const e = setupEnv(t);
+  e.cli('setup');
+  // Work the default start would leave out: a checked-out feature branch with a commit, and an uncommitted file.
+  git(e.repo, 'checkout', '-q', '-b', 'feature');
+  writeFileSync(join(e.repo, 'feature.txt'), 'feature work\n');
+  git(e.repo, 'add', '-A');
+  git(e.repo, 'commit', '-q', '-m', 'feature work');
+  writeFileSync(join(e.repo, 'scratch.txt'), 'not committed\n');
+  const ok = JSON.parse(e.cli('check', '--repo', e.repo, '--check', 'node check.js', '--json'));
+  assert.equal(ok.base.ref, 'main');
+  assert.deepEqual(ok.warnings.map(w => w.kind).sort(), ['checkout', 'uncommitted']);
+  assert.deepEqual([ok.checks.source, ok.checks.ran, ok.ready], ['given', true, true]);
+  assert.equal(readdirSync(join(e.env.NIGHTSHIFT_HOME, 'checks')).length, 0, 'the check worktree is removed');
+  assert.equal(git(e.repo, 'worktree', 'list').split('\n').length, 1);
+  // The checks run at the start commit, not in the checkout: a file only on the feature branch is absent.
+  const absent = JSON.parse(e.cli('check', '--repo', e.repo, '--check', 'test ! -e feature.txt', '--json'));
+  assert.equal(absent.ready, true);
+  // A failing check: not ready, exit code 2, with the output.
+  const failed = spawnSync(process.execPath, [cliFile, 'check', '--repo', e.repo, '--check', 'node -e "console.log(\'broken build\'); process.exit(3)"'],
+    { cwd: e.repo, env: e.env, encoding: 'utf8', timeout: 30_000 });
+  assert.equal(failed.status, 2);
+  assert.match(failed.stdout, /FAIL .*exit 3/);
+  assert.match(failed.stdout, /broken build/);
+  assert.match(failed.stdout, /Not ready/);
+  // Drafts record what they leave out; check --plan uses the draft's own start and checks.
+  const drafted = JSON.parse(e.cli('draft', 'docs/PLAN.md', '--json'));
+  assert.ok(drafted.draft.warnings.some(w => w.kind === 'checkout'));
+  assert.ok(e.json().plans.find(p => p.id === drafted.id).warnings.length >= 1);
+  const byPlan = JSON.parse(e.cli('check', '--plan', drafted.id, '--json'));
+  assert.deepEqual(byPlan.checks.commands, drafted.draft.plan.checks);
+  assert.equal(byPlan.base.commit, drafted.draft.plan.base);
+  // Without --check, a repository's latest plan supplies the checks; --no-run only reports.
+  const known = JSON.parse(e.cli('check', '--repo', e.repo, '--no-run', '--json'));
+  assert.deepEqual([known.checks.source, known.checks.ran, known.ready], [`plan ${drafted.id}`, false, null]);
 });

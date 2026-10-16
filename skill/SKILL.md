@@ -35,23 +35,40 @@ with them before drafting anything:
 
 The Nightshift app's New Plan window runs this same interview, if the owner prefers it.
 
-## Starting a plan
+## Starting a plan: prepare, check, draft
 
-1. Make sure the steps exist in a document in the repository (for example
-   `docs/PLAN.md` or a roadmap section). If the user described the work in chat, write
-   it there first as numbered steps with clear outcomes, and show it to them.
-2. Draft, do not start yet:
+You can do what Nightshift's agents may not (they never commit, push, merge, install, or
+use the network), so get the project ready first. Plans start from the project's main
+branch as it is on `origin` (fetched first), not from the current checkout: work merged
+there is included; unpushed commits, unmerged branches, and uncommitted changes are not.
+
+1. **Prepare.** Make sure the steps exist in a document in the repository (for example
+   `docs/plans/<topic>.md`); if the user described the work in chat, write it there as
+   numbered steps with clear outcomes and show it to them. Make sure the work the plan
+   builds on is merged into main, and dependencies are installed. Committing, merging, and
+   pushing follow the project's and the user's usual rules: ask before you push.
+2. **Check.** Run `nightshift check --repo <path>` (add `--check "<command>"` for the
+   project's test or build command if Nightshift does not know it yet). It shows where a
+   plan would start, lists work it would leave out (unpushed, unmerged, uncommitted), and
+   runs the checks in a fresh worktree at exactly that commit. If it says **Not ready**,
+   fix the cause on that branch with the user's agreement and check again. If the needed
+   work is local and the user does not want to push, draft with `--base main` (the local
+   branch) instead.
+3. **Draft**, do not start yet:
 
    ```sh
-   nightshift draft <path/to/doc.md> [--steps "1-10"] [--agents claude:codex]
+   nightshift draft <path/to/doc.md> [--steps "1-10"] [--agents claude:codex] [--base ref]
    ```
 
-   It prints the drafted tasks, checks, allowed paths, limits, and planner notes.
-   `--agents worker:reviewer` chooses who works and who reviews (claude, codex); the
-   default follows which providers are turned on. Each task carries a difficulty rating
-   (low, medium, high) that sets the worker's starting effort; retries go one level up.
-   If the owner disagrees with a rating: `nightshift difficulty <task> <level> --plan <id>`.
-3. Show the draft to the user and ask whether to start it. Only start when they say so:
+   It prints where the plan starts, the tasks, checks, allowed paths, limits, planner
+   notes, and anything left out. `--agents worker:reviewer` chooses who works and who
+   reviews (claude, codex); the default follows which providers are turned on. Each task
+   carries a difficulty rating (low, medium, high) that sets the worker's starting effort;
+   retries go one level up. If the owner disagrees with a rating:
+   `nightshift difficulty <task> <level> --plan <id>`. Then run
+   `nightshift check --plan <id>` to run the draft's own checks at its start commit.
+4. **Ask.** Show the draft and the check result to the user and ask whether to start it.
+   Only start when they say so:
 
    ```sh
    nightshift start <id>
@@ -60,12 +77,7 @@ The Nightshift app's New Plan window runs this same interview, if the owner pref
    (`nightshift run <doc>` drafts and asks in one go in a terminal; do not pass `--yes`
    unless the user has already approved the plan.)
 
-Plans start from the project's main branch as it is on `origin` (fetched first), not
-from the current checkout, so work merged elsewhere is included and uncommitted or
-unmerged local work is not. The draft prints where it starts; `--base <branch|commit>`
-chooses another start and `nightshift branches --repo <path>` lists candidates. Before
-starting, check that the work the plan needs is merged there and that the checks pass on
-it. `merge` later merges into that same branch locally; nothing is pushed.
+`merge` later merges into the branch the plan started from, locally; nothing is pushed.
 
 ## Watching and steering
 
