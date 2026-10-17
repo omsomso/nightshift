@@ -54,18 +54,21 @@ process.stdin.on('end', () => {
   // An edit-mode worker changes one file per task, as a real agent would.
   if (editMode && !isReview) {
     const n = /Task (\d+) of/.exec(input)?.[1] ?? 'x';
-    mkdirSync('notes', { recursive: true });
-    writeFileSync(`notes/task-${n}.txt`, `${process.env.FIXTURE_EDIT_CONTENT ?? 'done'} by claude fixture\n`);
+    // FIXTURE_EDIT_DIR and FIXTURE_EDIT_CONTENT shape the demo used for guide screenshots.
+    const dir = process.env.FIXTURE_EDIT_DIR ?? 'notes';
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(`${dir}/task-${n}.txt`, process.env.FIXTURE_EDIT_RAW ? `${process.env.FIXTURE_EDIT_CONTENT}\n` : `${process.env.FIXTURE_EDIT_CONTENT ?? 'done'} by claude fixture\n`);
   }
   const isPlanner = JSON.parse(value('--json-schema')).required.includes('tasks');
-  const result = isPlanner ? { id: 'Fixture Notes!', brief: 'Write two notes.', checks: ['node check.js'], allowedPaths: ['notes/'], notes: '',
+  // FIXTURE_PLAN (JSON) replaces the drafted plan, for demos.
+  const result = isPlanner && process.env.FIXTURE_PLAN ? JSON.parse(process.env.FIXTURE_PLAN) : isPlanner ? { id: 'Fixture Notes!', brief: 'Write two notes.', checks: ['node check.js'], allowedPaths: ['notes/'], notes: '',
       tasks: [{ id: 'note-one', title: 'Write note one', acceptance: 'A first note exists.', difficulty: 'low', difficultyReason: 'One small file.' }, { id: 'note-two', title: 'Write note two', acceptance: 'A second note exists.', difficulty: 'high', difficultyReason: 'Pretend this is subtle.' }] }
-    : isReview ? { passed: true, reason: 'Fixture review only.' }
-    : { summary: 'Fixture résumé 🦉', evidence: ['fixture:README.md'] };
+    : isReview ? { passed: true, reason: process.env.FIXTURE_REVIEW ?? 'Fixture review only.' }
+    : { summary: process.env.FIXTURE_SUMMARY ?? 'Fixture résumé 🦉', evidence: ['fixture:README.md'] };
   // An unrelated session's result must not complete this turn.
   send({ type: 'result', subtype: 'success', is_error: false, session_id: 'unrelated-session', structured_output: { summary: 'wrong', evidence: ['x'] } });
   send({ type: 'assistant', ...ids, message: { content: [{ type: 'tool_use', id: 'toolu_1', name: 'Read', input: { file_path: 'README.md' } }] } });
-  const text = Buffer.from(JSON.stringify({ type: 'assistant', ...ids, message: { content: [{ type: 'text', text: 'Résumé 🦉' }] } }) + '\n');
+  const text = Buffer.from(JSON.stringify({ type: 'assistant', ...ids, message: { content: [{ type: 'text', text: process.env.FIXTURE_SAY ?? 'Résumé 🦉' }] } }) + '\n');
   // Deliberately split inside an UTF-8 code point and inside the JSONL framing.
   const split = text.indexOf(Buffer.from('🦉')) + 1;
   process.stdout.write(text.subarray(0, split));
