@@ -8,6 +8,14 @@ export class BlockedError extends Error {}
 export class BillingGuardError extends BlockedError {}
 // The owner stopped the turn in flight and takes over from here.
 export class InterruptedError extends BlockedError {}
+// A turn ran past the plan's time per turn. Its unfinished changes stay in the working copy;
+// the task runs again (if attempts remain) and the next attempt is told so.
+export class TurnTimeoutError extends Error {
+  constructor(provider, minutes) {
+    super(`${provider} turn ran past ${Math.round(minutes)} minutes and was stopped.`);
+    this.minutes = minutes;
+  }
+}
 // The subscription's usage limit was reached. By default the plan waits for the reset and
 // carries on; the attempt does not count. `resetsAt` is an ISO time.
 export class UsageLimitError extends BlockedError {
@@ -55,9 +63,9 @@ export class Supervisor {
     this.store.save(this.state);
   }
 
-  pause(value = true) {
+  pause(value = true, reason) {
     this.state.paused = value;
-    this.record(null, value ? 'paused' : 'resumed', 'Applies before the next dispatch.');
+    this.record(null, value ? 'paused' : 'resumed', reason ? `${reason}. Applies before the next dispatch.` : 'Applies before the next dispatch.');
     this.store.save(this.state);
   }
 
@@ -100,8 +108,8 @@ export class Supervisor {
     if (!this.store.takeCommands) return;
     for (const command of this.store.takeCommands()) {
       try {
-        if (command.type === 'pause') this.pause(true);
-        else if (command.type === 'resume') this.pause(false);
+        if (command.type === 'pause') this.pause(true, command.payload?.reason);
+        else if (command.type === 'resume') this.pause(false, command.payload?.reason);
         else if (command.type === 'add-task') this.add(command.payload);
         else if (command.type === 'retry') this.retry(command.payload?.id);
         else if (command.type === 'interrupt') this.interrupt();
@@ -134,7 +142,7 @@ export class Supervisor {
     const limits = this.state.plan?.limits;
     if (!limits) throw new Error('There is no plan.');
     if (!(name in limits)) throw new Error(`Unknown limit ${name}.`);
-    if (!(Number(value) > 0)) throw new Error('A limit must be a positive number.');
+    if (!(Number(value) > 0) && !(name === 'fixupRounds' && Number(value) === 0)) throw new Error('A limit must be a positive number.');
     limits[name] = Number(value);
     if (this.workspace) this.workspace.limits = limits;
     this.record(null, 'limit-changed', `${name} = ${value}`);
@@ -222,7 +230,9 @@ export class Supervisor {
     this.current = { task, abort };
     // Effort applies in plan mode, where the plan carries the owner's effort settings.
     const effortFor = role => this.state.plan?.effort ? (role === 'worker' ? workerEffort(task, this.state.plan.effort) : reviewerEffort(this.state.plan.effort)) : undefined;
-    const context = role => ({ onEvent: this.observer(task, role), signal: abort.signal, plan: this.state.plan, effort: effortFor(role) });
+    // The plan's current time per turn, read while the turn runs, so `limit turnMinutes` applies at once.
+    const turnLimit = this.state.plan?.limits?.turnMinutes ? () => this.state.plan.limits.turnMinutes * 60_000 : undefined;
+    const context = role => ({ onEvent: this.observer(task, role), signal: abort.signal, plan: this.state.plan, effort: effortFor(role), timeoutMs: turnLimit });
     try {
       if (task.attempts >= task.maxAttempts) {
         task.status = 'blocked';
@@ -232,6 +242,9 @@ export class Supervisor {
         return true;
       }
       this.workspace?.ensureScratch?.();
+      // Unfinished work from an earlier attempt (a timeout, an interrupt) is still in the working
+      // copy; the worker is told which files, so it continues instead of starting over.
+      task.leftover = this.workspace?.pending?.() ?? [];
       task.status = 'running';
       task.attempts += 1;
       const effort = effortFor('worker');
@@ -459,7 +472,7 @@ export class Supervisor {
       const review = await this.reviewer.review({ id: plan.final.id, title: `Whole plan: ${plan.id}`, acceptance: plan.brief },
         { summary: `All ${plan.tasks.length} tasks committed`, evidence: commits },
         { onEvent: this.observer(plan.final, 'reviewer'), signal: abort.signal, plan, change: { planChange, checks }, final: true,
-          effort: plan.effort ? reviewerEffort(plan.effort) : undefined });
+          effort: plan.effort ? reviewerEffort(plan.effort) : undefined, timeoutMs: () => plan.limits.turnMinutes * 60_000 });
       if (abort.signal.aborted) throw abort.signal.reason;
       if (!review || typeof review.passed !== 'boolean' || typeof review.reason !== 'string' || !review.reason.trim()) {
         return stop('Final reviewer did not provide a valid decision and reason.');
@@ -504,6 +517,23 @@ export class Supervisor {
     // An abort can surface as a provider error (for example a killed process); the
     // owner's interrupt is the real cause.
     if (this.current?.abort.signal.aborted && !(error instanceof InterruptedError)) error = this.current.abort.signal.reason;
+    // Out of time is not "uncertain": what the turn changed is in the working copy. With
+    // attempts left the task simply runs again, and the next attempt is told.
+    if (error instanceof TurnTimeoutError && task.attempts < task.maxAttempts) {
+      task.status = 'ready';
+      task.timedOut = { minutes: Math.round(error.minutes), at: new Date().toISOString() };
+      task.reason = `${error.message} Its unfinished changes stay in the working copy; the next attempt continues from them.`;
+      this.record(task.id, 'turn-timeout', task.reason);
+      this.store.save(this.state);
+      return;
+    }
+    if (error instanceof TurnTimeoutError) {
+      task.status = 'blocked';
+      task.reason = `${error.message} This was the last attempt (${task.attempts} of ${task.maxAttempts}). If the task is simply big, raise the time per turn (limit turnMinutes) and retry; its unfinished changes are in the working copy.`;
+      this.record(task.id, 'blocked', task.reason);
+      this.store.save(this.state);
+      return;
+    }
     if (error instanceof UsageLimitError && waitsForLimits()) {
       task.status = 'ready';
       task.attempts = Math.max(0, task.attempts - 1);

@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { BlockedError, BillingGuardError, UsageLimitError } from '../supervisor.js';
+import { BlockedError, BillingGuardError, UsageLimitError, TurnTimeoutError } from '../supervisor.js';
+import { deadline } from '../deadline.js';
 import { parseUsageLimit, resetFromEvent } from '../limits.js';
 import { JsonlDecoder } from '../jsonl.js';
 
@@ -62,7 +63,9 @@ export class ClaudeSession {
     Object.assign(this, { cwd, model, maxBudgetUsd, timeoutMs, command, baseArgs, maxLineBytes, edit, addDirs });
   }
 
-  async run({ prompt, session, outputSchema, onEvent = () => {}, signal, effort }) {
+  // `timeoutMs` (number or function) overrides the session's; a function lets the plan's time
+  // per turn change while the turn runs.
+  async run({ prompt, session, outputSchema, onEvent = () => {}, signal, effort, timeoutMs }) {
     signal?.throwIfAborted();
     const emit = event => onEvent({ provider: 'claude', ...event });
     const resume = Boolean(session?.threadId);
@@ -86,7 +89,7 @@ export class ClaudeSession {
           turn.finished = true;
           if (error) reject(error); else resolve(value);
         };
-        timer = setTimeout(() => finish(new Error('Claude turn timed out; reconcile its external effects before retrying.')), this.timeoutMs);
+        timer = deadline(timeoutMs ?? this.timeoutMs, ms => finish(new TurnTimeoutError('Claude', ms / 60_000)));
         // Interrupt: settle now; the finally block terminates the process.
         onAbort = () => finish(signal.reason);
         if (signal?.aborted) return onAbort();
@@ -108,7 +111,7 @@ export class ClaudeSession {
         if (child.pid) child.stdin.end(prompt); // Otherwise the spawn error event reports the failure.
       });
     } finally {
-      clearTimeout(timer);
+      timer?.();
       if (onAbort) signal?.removeEventListener('abort', onAbort);
       // Best effort only. Terminating the process never rolls back earlier effects.
       if (child.exitCode === null && child.signalCode === null && child.pid) {

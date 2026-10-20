@@ -103,14 +103,30 @@ Nightshift decides it deterministically (`src/effort.js`):
 | Limit | Default | When hit |
 | --- | --- | --- |
 | Attempts per task | 3 | task blocks, plan pauses |
-| Time per turn | 20 min | turn interrupted, task blocks |
+| Time per turn | 120 min | turn stopped; the task runs again (its changes kept) while attempts remain, then blocks |
 | Dispatches per plan | 3 × tasks + 2 | plan pauses |
-| Tokens per plan | 5 M new tokens (input minus cache re-reads, plus output; `src/tokens.js`) | plan pauses |
-| Wall-clock per plan | 6 h | plan pauses |
-| Changed lines per task | 800 | attempt fails the gate |
+| Tokens per plan | 20 M new tokens (input minus cache re-reads, plus output; `src/tokens.js`) | plan pauses |
+| Wall-clock per plan | 24 h | plan pauses |
+| Changed lines per task | 3000 | attempt fails the gate |
+| Time per check | 60 min | the check fails |
 | Fix-up rounds after a failed final phase | 1 (0 disables) | plan blocks |
 | Same failing check output twice, or an empty diff | — | task blocks (stagnation) |
 | File outside allowed paths or a protected path | — | task blocks (drift) |
+
+The defaults (since 2026-10-20) are worst cases with a wide margin: real milestone tasks
+took 15 to 30 minutes per turn, up to about 2,000 changed lines, and about 2 M new tokens
+per plan. Limits catch runaways; they must never stop a healthy unattended plan. `limit`
+changes apply at once: directly when no runner holds the plan, within a second through the
+runner otherwise (the time per turn also applies to the turn in progress), and to the draft
+before it starts. A turn that runs out of time is no longer "execution uncertain": its
+changes stay in the worktree, the task runs again, and the next attempt is told it timed
+out and which files it left. Pauses record their reason (`pause --reason`), shown in the app.
+
+Plans approved outside Nightshift are noticed: `list` checks whether the plan branch's
+commits are in the starting branch (local or `origin`), and `sync` (the app runs it every
+two minutes) fetches `origin` and asks `gh` whether an open pull request was merged, which
+also catches squash merges. Such plans become `merged` (with `mergedOutside`) and move to
+the app's archive.
 
 Existing controls stay: `pause`, `interrupt`, the dispatch cap, billing guards, and
 restart recovery (anything in flight blocks rather than replays). A blocked plan

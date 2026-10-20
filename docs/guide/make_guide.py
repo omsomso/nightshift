@@ -449,7 +449,7 @@ s += section(6, 'In the morning', 'A finished plan waits on its branch. Look at 
 s += [shot('panel-ready.png', FULL, 'Ready to merge: the final review\'s verdict, Review Changes, and Approve.'),
       P('<b>Review Changes</b> opens every task\'s change side by side with the reviewer\'s verdict and the checks, plus the whole '
         'plan\'s change at the top. You can approve from there.'),
-      shot('review.png', 150 * mm, 'Review: the whole plan or one task at a time, with colored diffs.'),
+      shot('review.png', 128 * mm, 'Review: the whole plan or one task at a time, with colored diffs.'),
       P('Approving', h2),
       table([['Choice', 'What happens'],
              ['Merge on this Mac', 'The plan\'s branch is merged into the branch it started from (for example main), wherever that '
@@ -457,9 +457,10 @@ s += [shot('panel-ready.png', FULL, 'Ready to merge: the final review\'s verdict
              ['Open a pull request', 'Nightshift pushes only the plan\'s branch and opens a pull request into the starting branch with '
               'the GitHub CLI. Merge it on GitHub as usual.'],
              ], [40 * mm, FULL - 40 * mm], bold_first=True),
-      P('The Approve button uses your default from Settings › Runs; its arrow offers the other way. Either way you confirm first. '
-        'Afterwards, <b>Remove</b> (in the round ... menu at the top right) clears the plan from the list; a plan you do not want can be deleted the same '
-        'way, along with its branch.')]
+      P('The Approve button uses your default from Settings › Runs; its arrow offers the other way. Either way you confirm first.'),
+      P('<b>Merged plans move to the Archive</b> at the bottom of the sidebar, also when you merge them yourself or on GitHub: '
+        'Nightshift notices within a couple of minutes. <b>Remove</b> (in the round ... menu at the top right) clears a plan for good; '
+        'a plan you do not want is deleted the same way, along with its branch.')]
 
 # ── Part 7: Safety ─────────────────────────────────────────────────────────────
 s += section(7, 'Safety and limits', 'The fences are enforced by the operating system and by Nightshift\'s own code, not by '
@@ -483,15 +484,16 @@ s += [table([['Agents can', 'Agents cannot'],
       KeepTogether([P('Kill switches', h2),
       table([['Limit', 'Default', 'When reached'],
              ['Attempts per task', '3', 'The task stops for you.'],
-             ['Time per agent turn', '20 minutes', 'The turn is stopped; the task stops for you.'],
+             ['Time per agent turn', '2 hours', 'The turn stops; the task runs again, keeping its changes.'],
              ['Attempts per plan', '3 per task + 2', 'The plan pauses.'],
-             ['New tokens per plan', '5 million', 'The plan pauses. Cache re-reads do not count.'],
-             ['Time per plan', '6 hours', 'The plan pauses.'],
-             ['Changed lines per task', '800', 'The worker is asked for a smaller change.'],
-             ['Time per check', '10 minutes', 'The check fails.'],
+             ['New tokens per plan', '20 million', 'The plan pauses. Cache re-reads do not count.'],
+             ['Time per plan', '24 hours', 'The plan pauses.'],
+             ['Changed lines per task', '3,000', 'The worker is asked for a smaller change.'],
+             ['Time per check', '1 hour', 'The check fails.'],
              ['Fix-up rounds at the end', '1', 'The plan stops for you.']],
             [60 * mm, 32 * mm, FULL - 92 * mm], bold_first=True)]),
-      P('Raise a limit on a running plan with ' + m('nightshift limit tokens 8000000 --plan ID') + ', then resume.', small)]
+      P('The defaults are generous worst cases; they catch runaways, not slow tasks. Change any of them in the plan\'s Limits card '
+        '(Change…) or with ' + m('nightshift limit tokens 30000000 --plan ID') + '; a running plan applies it at once.', small)]
 
 # ── Part 8: Settings and usage ─────────────────────────────────────────────────
 s += section(8, 'Settings and usage')

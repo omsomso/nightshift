@@ -8,7 +8,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { ClaudeAdapter, ClaudeReviewer } from '../src/adapters/claude.js';
 import { CodexAdapter } from '../src/adapters/codex.js';
 import { RpcClient } from '../src/codex/rpc-client.js';
-import { Supervisor, BillingGuardError, InterruptedError, UsageLimitError } from '../src/supervisor.js';
+import { Supervisor, BillingGuardError, InterruptedError, UsageLimitError, TurnTimeoutError } from '../src/supervisor.js';
 import { parseUsageLimit } from '../src/limits.js';
 import { mkdirSync } from 'node:fs';
 import { Store } from '../src/store.js';
@@ -158,7 +158,16 @@ test('claude interrupt kills the running process promptly', async () => {
 });
 
 test('claude whole-turn deadline bounds a stalled process', async () => {
-  await assert.rejects(() => new ClaudeAdapter(options('stall', { timeoutMs: 150 })).execute(sampleTask), /timed out/);
+  await assert.rejects(() => new ClaudeAdapter(options('stall', { timeoutMs: 150 })).execute(sampleTask), /ran past/);
+});
+
+test('the time per turn can change while the turn runs', async () => {
+  let limit = 150;
+  setTimeout(() => { limit = 700; }, 60);
+  const started = Date.now();
+  const error = await new ClaudeAdapter(options('stall')).execute(sampleTask, { onEvent: () => {}, timeoutMs: () => limit }).catch(e => e);
+  assert.ok(error instanceof TurnTimeoutError, String(error));
+  assert.ok(Date.now() - started >= 650, `stopped after ${Date.now() - started} ms, not at the raised limit`);
 });
 
 test('claude persistence failure prevents the process from starting', async () => {

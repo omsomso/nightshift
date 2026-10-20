@@ -85,6 +85,6 @@ read-only runs have all passed review (see the setup docs). Edit mode completed 
 plans on a toy project (claude:codex and codex:claude; see docs/EDIT_MODE.md).
 Neither adapter has run on the owner's VM or accessed existing chats. Commands run from
 an agent sandbox may lack network access to OpenAI; run live checks from a normal terminal.
-Run `npm test` (142 tests) and `npm run demo` for the offline baseline. The live smoke
+Run `npm test` (148 tests) and `npm run demo` for the offline baseline. The live smoke
 commands are separate and can consume provider usage. Their version pins are operator
 checks, not declarations that a specific release has been certified.

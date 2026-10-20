@@ -97,9 +97,9 @@ test('discard removes a draft, or a started plan with its worktree and branch, o
   git(worktree, 'add', '-A');
   git(worktree, '-c', 'user.name=T', '-c', 'user.email=t@x', 'commit', '-q', '-m', 'accepted task');
   const preview = e.run('discard', 'work');
-  assert.match(preview.stderr, /1 commit not merged anywhere; it is lost/);
+  assert.match(preview.stderr, /1 commit on no other branch; it is lost/);
   assert.equal(preview.status, 1);
-  assert.match(preview.stderr, /worktree .*worktree[\s\S]*branch nightshift\/work[\s\S]*directory/);
+  assert.match(preview.stderr, /worktree .*worktree[\s\S]*branch nightshift\/work[\s\S]*plan record/);
   assert.equal(existsSync(worktree), true);
   e.cli('discard', 'work', '--yes');
   assert.equal(existsSync(dir), false);
@@ -121,12 +121,19 @@ test('discard refuses while the runner is alive; a merged plan loses only its re
   const main = git(e.repo, 'rev-parse', 'main');
   patchState(merged, { plan: { status: 'merged', mergeCommit: main } });
   const preview = e.run('discard', 'shipped');
-  assert.match(preview.stderr, /plan record[\s\S]*branch nightshift\/shipped \(already merged\)/);
+  assert.match(preview.stderr, /branch nightshift\/shipped .*\(its work is merged or kept elsewhere\)[\s\S]*plan record/);
   assert.doesNotMatch(preview.stderr, /lost/);
   e.cli('discard', 'shipped', '--yes');
   assert.equal(existsSync(merged), false);
   assert.equal(git(e.repo, 'branch', '--list', 'nightshift/shipped'), '');
   assert.equal(git(e.repo, 'rev-parse', 'main'), main, 'the merged work stays');
+
+  // A plan whose worktree was already removed elsewhere is still deleted completely.
+  const gone = e.startedPlan('gone');
+  git(e.repo, 'worktree', 'remove', '--force', join(gone, 'worktree'));
+  assert.match(e.cli('discard', 'gone', '--yes'), /Discarded plan gone/);
+  assert.equal(existsSync(gone), false);
+  assert.equal(git(e.repo, 'branch', '--list', 'nightshift/gone'), '');
 });
 
 test('limit rejects unknown names at once and queues known ones', t => {
@@ -136,8 +143,18 @@ test('limit rejects unknown names at once and queues known ones', t => {
   assert.equal(refused.status, 1);
   assert.match(refused.stderr, /Unknown limit speed\. Valid limits: attemptsPerTask, turnMinutes, dispatches, tokens, hours, changedLinesPerTask, checkMinutes/);
   assert.equal(Store.inspect(dir).pendingCommands, 0, 'nothing was queued');
-  assert.match(e.cli('limit', 'tokens', '8000000', '--plan', 'limits'), /Queued limit/);
+  // No runner: applied at once.
+  assert.match(e.cli('limit', 'tokens', '8000000', '--plan', 'limits'), /Set tokens = 8000000/);
+  assert.equal(Store.inspect(dir).plan.limits.tokens, 8000000);
+  assert.equal(Store.inspect(dir).pendingCommands, 0);
+  assert.match(e.cli('limit', 'fixupRounds', '0', '--plan', 'limits'), /Set fixupRounds = 0/);
+  // A running plan: queued, applied by the runner within a second.
+  patchState(dir, { lease: process.pid });
+  assert.match(e.cli('limit', 'turnMinutes', '90', '--plan', 'limits'), /Queued: turnMinutes = 90\. The running plan applies it within a second/);
   assert.equal(Store.inspect(dir).pendingCommands, 1);
+  // A draft keeps it for when it starts.
+  e.draft('later');
+  assert.match(e.cli('limit', 'hours', '30', '--plan', 'later'), /Draft later: hours = 30/);
 });
 
 test('list shows the running or reviewed task of each plan', t => {

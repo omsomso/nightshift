@@ -453,3 +453,50 @@ test('review, activity, usage, and fix-prompt describe a plan for the owner', as
   assert.match(fix.prompt, new RegExp(`nightshift accept note-one --plan ${blocked}`));
   assert.match(fix.prompt, /BAD in notes/);
 });
+
+test('plans merged outside Nightshift are noticed: by hand into main, or a pull request merged on GitHub', async t => {
+  const e = setupEnv(t);
+  e.cli('setup');
+  const remote = join(e.root, 'origin.git');
+  git(e.root, 'init', '-q', '--bare', '-b', 'main', remote);
+  git(e.repo, 'remote', 'add', 'origin', remote);
+  git(e.repo, 'push', '-q', '-u', 'origin', 'main');
+  writeFileSync(join(e.root, 'bin', 'gh'), `#!/bin/sh\n[ "$1" = auth ] && exit 0\n[ "$1 $2" = "pr view" ] && echo '{"state":"MERGED","mergedAt":"2026-10-20T15:33:36Z"}' && exit 0\necho "https://github.com/example/repo/pull/9"\n`, { mode: 0o755 });
+  e.env.NIGHTSHIFT_GH_BIN = join(e.root, 'bin', 'gh');
+  const byHand = JSON.parse(e.cli('draft', 'docs/PLAN.md', '--json')).id;
+  const viaPr = JSON.parse(e.cli('draft', 'docs/PLAN.md', '--json')).id;
+  e.cli('start', byHand);
+  e.cli('start', viaPr);
+  await until(() => e.json().plans.every(p => p.status === 'awaiting-approval'), 40_000);
+  // The owner merges one branch by hand, and opens a pull request for the other.
+  git(e.repo, 'merge', '-q', '--no-ff', '-m', 'merge by hand', `nightshift/${byHand}`);
+  e.cli('merge', viaPr, '--pr');
+  let plans = e.json().plans;
+  const hand = plans.find(p => p.id === byHand);
+  assert.deepEqual([hand.status, hand.mergedOutside], ['merged', 'its commits are in main']);
+  assert.equal(plans.find(p => p.id === viaPr).status, 'pr-open', 'a squash-merged pull request needs GitHub to tell');
+  assert.match(e.cli('sync'), new RegExp(`${viaPr}: merged \\(its pull request was merged on GitHub\\)`));
+  plans = e.json().plans;
+  assert.deepEqual([plans.find(p => p.id === viaPr).status, plans.find(p => p.id === viaPr).mergedAt], ['merged', '2026-10-20T15:33:36Z']);
+  assert.match(e.cli('sync'), /No plan was merged outside Nightshift/);
+});
+
+test('a pause says why; a draft report shows the draft', t => {
+  const e = setupEnv(t);
+  e.cli('setup');
+  const id = JSON.parse(e.cli('draft', 'docs/PLAN.md', '--json')).id;
+  const report = e.cli('report', '--plan', id);
+  assert.match(report, new RegExp(`# Draft \`${id}\`: waiting for approval`));
+  assert.match(report, /1\. \*\*Write note one\*\* \(low\)[\s\S]*Done when: A first note exists\./);
+  assert.match(report, /120 min per turn, 24 h per plan, 20M new tokens/);
+  e.cli('start', id);
+  e.cli('pause', '--plan', id, '--reason', 'Paused to raise the limits');
+  const paused = () => e.json().plans.find(p => p.id === id);
+  // The runner applies the pause at its next step; the plan may finish first, so only check when it paused.
+  const state = Store.inspect(join(e.env.NIGHTSHIFT_HOME, 'plans', id));
+  assert.ok(state.pendingCommands >= 0);
+  return until(() => paused().pauseReason || paused().status === 'awaiting-approval', 20_000).then(() => {
+    const plan = paused();
+    if (plan.pauseReason) assert.equal(plan.pauseReason.text, 'Paused to raise the limits');
+  });
+});

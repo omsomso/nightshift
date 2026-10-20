@@ -47,6 +47,13 @@ export class Workspace {
     return dir;
   }
 
+  // Files changed in the working copy and not yet committed (the scratch folder is ignored).
+  pending() {
+    try {
+      return git(this.worktree, ['status', '--porcelain', '--ignore-submodules=dirty']).split('\n').filter(Boolean).map(line => line.slice(3)).slice(0, 40);
+    } catch { return []; }
+  }
+
   // Stages everything and describes the change since the last commit on the branch.
   inspect() {
     git(this.worktree, ['add', '-A']);

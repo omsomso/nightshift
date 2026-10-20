@@ -93,3 +93,19 @@ function planSection(state) {
   }
   return out;
 }
+
+// A draft has no run yet: show what it would do, so `report --plan <draft>` is never empty.
+export function renderDraft(id, draft) {
+  const plan = draft.plan;
+  const out = [`# Draft \`${id}\`: waiting for approval`, '', plan.brief, '',
+    `Repository \`${plan.repo}\`, starting from ${plan.baseRef ? `\`${plan.baseRef}\` @ ` : ''}\`${String(plan.base ?? '').slice(0, 12)}\`; agents: ${draft.agents ?? 'default'}.`, '',
+    '## Tasks', ''];
+  plan.tasks.forEach((task, i) => out.push(`${i + 1}. **${task.title}**${task.difficulty ? ` (${task.difficulty})` : ''}  `, `   Done when: ${task.acceptance}`));
+  out.push('', `Checks: ${plan.checks.map(c => `\`${c}\``).join('; ')}`, `Allowed paths: ${plan.allowedPaths.map(p => p || '(whole repository)').join(', ')}`);
+  const l = plan.limits;
+  out.push(`Limits: ${l.attemptsPerTask} attempts per task, ${l.turnMinutes} min per turn, ${l.hours} h per plan, ${(l.tokens / 1e6).toFixed(0)}M new tokens, ${l.changedLinesPerTask} changed lines per task, ${l.checkMinutes} min per check.`);
+  if (draft.notes) out.push('', `Planner notes: ${draft.notes}`);
+  if (draft.warnings?.length) out.push('', 'Left out of this plan:', ...draft.warnings.map(w => `- ${w.message}`));
+  out.push('', `Approve with \`nightshift start ${id}\`, or change it with \`nightshift edit ${id}\`.`, '');
+  return out.join('\n');
+}

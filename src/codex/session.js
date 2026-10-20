@@ -1,4 +1,5 @@
-import { BlockedError, BillingGuardError, UsageLimitError } from '../supervisor.js';
+import { BlockedError, BillingGuardError, UsageLimitError, TurnTimeoutError } from '../supervisor.js';
+import { deadline } from '../deadline.js';
 import { parseUsageLimit } from '../limits.js';
 import { RpcClient } from './rpc-client.js';
 import { codexEffort } from '../effort.js';
@@ -25,7 +26,7 @@ export class CodexSession {
     this.createClient = createClient;
   }
 
-  async run({ prompt, session, outputSchema, onEvent = () => {}, signal, effort }) {
+  async run({ prompt, session, outputSchema, onEvent = () => {}, signal, effort, timeoutMs }) {
     signal?.throwIfAborted();
     const client = this.createClient();
     const emit = event => onEvent({ provider: 'codex', ...event });
@@ -70,7 +71,7 @@ export class CodexSession {
       // A synchronous persistence callback must succeed before turn/start is sent.
       emit({ type: 'session', threadId });
       inTurn = true;
-      return await this.turn(client, { threadId, prompt, outputSchema, emit, signal, effort });
+      return await this.turn(client, { threadId, prompt, outputSchema, emit, signal, effort, timeoutMs });
     } finally {
       signal?.removeEventListener('abort', onAbort);
       client.removeListener('serverRequest', blockOnRequest);
@@ -78,7 +79,7 @@ export class CodexSession {
     }
   }
 
-  async turn(client, { threadId, prompt, outputSchema, emit, signal, effort }) {
+  async turn(client, { threadId, prompt, outputSchema, emit, signal, effort, timeoutMs }) {
     let turnId;
     let buffer = [];
     let finalText = '';
@@ -151,7 +152,7 @@ export class CodexSession {
       buffer.push(message);
       if (buffer.length > 2048) fail(new Error('Too many events arrived before the turn response.'));
     };
-    const timer = setTimeout(() => fail(new Error('Codex turn timed out; reconcile its external effects before retrying.')), this.timeoutMs);
+    const timer = deadline(timeoutMs ?? this.timeoutMs, ms => fail(new TurnTimeoutError('Codex', ms / 60_000)));
     client.on('notification', notification);
     client.on('fatal', fail);
     const onAbort = () => fail(signal.reason);
@@ -179,7 +180,7 @@ export class CodexSession {
       }
       throw error;
     } finally {
-      clearTimeout(timer);
+      timer();
       signal?.removeEventListener('abort', onAbort);
       client.removeListener('notification', notification);
       client.removeListener('fatal', fail);
