@@ -105,7 +105,7 @@ Nightshift decides it deterministically (`src/effort.js`):
 | Attempts per task | 3 | task blocks, plan pauses |
 | Time per turn | 20 min | turn interrupted, task blocks |
 | Dispatches per plan | 3 × tasks + 2 | plan pauses |
-| Tokens per plan | 5 M (input incl. cached + output) | plan pauses |
+| Tokens per plan | 5 M new tokens (input minus cache re-reads, plus output; `src/tokens.js`) | plan pauses |
 | Wall-clock per plan | 6 h | plan pauses |
 | Changed lines per task | 800 | attempt fails the gate |
 | Fix-up rounds after a failed final phase | 1 (0 disables) | plan blocks |
@@ -152,6 +152,25 @@ time (Claude: the `rate_limit_event` message or the result text, including the
 to ready without counting the attempt, the plan pauses with `waitUntil` (persisted), and
 the runner resumes it two minutes after the reset. `onUsageLimit: stop` blocks the task and
 pauses instead. A queued plan does not start during such a wait.
+
+## Refused requests and scratch files
+
+A request the fence refuses (a file outside the working copy, a git history command, the
+network) never stops a task: the agent is told no and carries on, the refusal is recorded
+(`provider:policy-denied`, shown in Activity), and the change still has to pass the gates,
+checks, and review. Until 2026-10-20 any refusal other than git history blocked the task,
+which stopped a VSTS plan when its worker tried to read a screenshot it had saved outside
+the worktree. Agents now keep screenshots, logs, and other scratch files in
+`.nightshift-scratch/` inside the worktree; its own `.gitignore` keeps it out of every
+change and commit, and it is removed before the worktree is.
+
+## Plan granularity
+
+Tasks are milestones: one meaningful outcome worth a full agent session (a feature that
+works, a component in place and used, a fix with its test). Every task costs a worker turn,
+the checks, and a review, so the planner, the interview, and the skill fold small edits
+(renames, label wording, single values, doc lines) into the milestone they serve, combine
+adjacent steps that only make sense together, and aim for 2 to 6 tasks per plan.
 
 ## Owner fixes
 

@@ -161,21 +161,15 @@ export class ClaudeSession {
     emit({ type: 'usage', threadId: sessionId, turnId: turn.turnId, costUsd: message.total_cost_usd,
       numTurns: message.num_turns, durationMs: message.duration_ms, tokens, usage: message.usage });
     emit({ type: 'turn-completed', threadId: sessionId, turnId: turn.turnId, status, terminalReason: message.terminal_reason });
-    // Git history commands are Nightshift's job and denied by policy. Project rules (for
-    // example "commit and push after every change") may lead an agent to try them; that is
-    // recorded but does not block the task. Any other denied request still blocks it.
+    // A denied request (git history, a file outside the working copy, the network) is the
+    // fence working, not a reason to stop: the agent was told no and carried on, and its
+    // change still goes through the gates, checks, and review. Each denial is recorded.
     const denials = message.permission_denials ?? [];
-    const expected = denial => denial.tool_name === 'Bash' && gitHistoryCommand.test(String(denial.tool_input?.command ?? ''));
+    const gitHistory = denial => denial.tool_name === 'Bash' && gitHistoryCommand.test(String(denial.tool_input?.command ?? ''));
     for (const denial of denials) {
-      emit(expected(denial)
-        ? { type: 'policy-denied', threadId: sessionId, turnId: turn.turnId, tool: denial.tool_name, toolUseId: denial.tool_use_id,
-            command: String(denial.tool_input.command).slice(0, 200), reason: 'Git history is Nightshift\'s job; left for the owner.' }
-        : { type: 'approval-required', threadId: sessionId, turnId: turn.turnId, tool: denial.tool_name,
-            toolUseId: denial.tool_use_id, reason: 'Denied automatically: this adapter never approves tool requests.' });
-    }
-    const blocking = denials.filter(denial => !expected(denial));
-    if (blocking.length) {
-      throw new BlockedError(`Provider request requires human handling: denied ${blocking.map(d => d.tool_name).join(', ')}`);
+      emit({ type: 'policy-denied', threadId: sessionId, turnId: turn.turnId, tool: denial.tool_name, toolUseId: denial.tool_use_id,
+        target: toolTarget(denial.tool_input), command: denial.tool_name === 'Bash' ? String(denial.tool_input?.command ?? '').slice(0, 200) : undefined,
+        reason: gitHistory(denial) ? 'Git history is Nightshift\'s job; left for the owner.' : 'Outside what this agent may do; the agent was told no and continued.' });
     }
     if (status !== 'completed') {
       const text = `${message.errors?.join('; ') ?? ''} ${message.result ?? ''}`;

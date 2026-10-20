@@ -466,3 +466,31 @@ test('an owner fix that still fails the checks blocks again with the output', as
   assert.equal(one.status, 'blocked');
   assert.match(one.reason, /owner's fix fails the checks[\s\S]*BAD in one\.txt/);
 });
+
+test('scratch files stay out of the change and the commit; cache re-reads do not count toward the token limit', async t => {
+  const env = makeRepo(t);
+  const worker = scriptedWorker({ one: { 'notes/one.txt': 'one\n', '.nightshift-scratch/screenshot.png': 'png' } });
+  const counting = { calls: worker.calls, async execute(task, context) {
+    // A long session: most input is the same context read again from the cache.
+    context.onEvent({ type: 'usage', provider: 'test', tokens: { input: 2_000_000, cachedInput: 1_999_900, output: 50 } });
+    return worker.execute(task, context);
+  } };
+  const { store, workspace, supervisor } = startPlan(t, env, counting, scriptedReviewer(), { limits: { tokens: 1000 } });
+  await supervisor.run();
+  const state = store.read();
+  assert.equal(state.plan.status, 'awaiting-approval', 'two tasks of 150 new tokens each stay under a 1,000-token limit');
+  const one = state.tasks.find(x => x.id === 'one');
+  assert.equal(git(workspace.worktree, 'show', '--name-only', '--format=', one.commit), 'notes/one.txt');
+  assert.equal(existsSync(join(workspace.worktree, '.nightshift-scratch', 'screenshot.png')), true, 'the scratch file is still there for the agent');
+  assert.equal(workspace.clean(), true);
+});
+
+test('the planner and the interviewer ask for milestones, not chores', async () => {
+  const { plannerPrompt, interviewPrompt } = await import('../src/prompts.js');
+  const planner = plannerPrompt({ doc: 'docs/PLAN.md', rules: [] });
+  assert.match(planner, /Tasks are milestones, not chores/);
+  assert.match(planner, /renaming something[\s\S]*never tasks of their own/);
+  assert.doesNotMatch(planner, /Do not invent, merge, split, or reorder/);
+  const interview = interviewPrompt({ notes: 'x', projects: [] });
+  assert.match(interview, /Each step is a milestone/);
+});

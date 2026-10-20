@@ -53,6 +53,7 @@ export function activity(id, { limit = 40 } = {}) {
         if (d.item?.type === 'commandExecution') { kind = 'tool'; text = `${role} · ran ${String(d.item.command ?? '').slice(0, 160)}`; }
         else if (d.item?.type === 'fileChange') { kind = 'tool'; text = `${role} · edited ${(d.item.changes ?? []).map(c => c.path).join(', ').slice(0, 160)}`; }
         break;
+      case 'provider:policy-denied': kind = 'note'; text = `${role} · refused: ${d.tool}${d.target ? ` ${d.target}` : ''} (carried on)`; break;
       case 'provider:output': if (String(d.text ?? '').trim()) { kind = 'say'; text = `${role}: ${String(d.text).trim().replace(/\s+/g, ' ').slice(0, 220)}`; } break;
       case 'change-inspected': kind = 'gate'; text = `Changed ${d.files?.length ?? 0} file${d.files?.length === 1 ? '' : 's'} (${d.changedLines ?? 0} lines)${d.gate && d.gate !== 'ok' ? `: ${d.gate}` : ''}`; break;
       case 'checks': case 'baseline-checks': case 'final-checks':
@@ -91,7 +92,10 @@ export function usage({ days = 14 } = {}) {
       if (event.type === 'dispatched') entry.dispatches += 1;
       if (event.type !== 'provider:usage') continue;
       const d = event.detail ?? {};
-      const input = Number(d.tokens?.input) || 0, output = Number(d.tokens?.output) || 0;
+      // input here means new input: cache re-reads are counted separately (src/tokens.js).
+      const cachedInput = Number(d.tokens?.cachedInput) || 0;
+      const input = Math.max(0, (Number(d.tokens?.input) || 0) - cachedInput), output = Number(d.tokens?.output) || 0;
+      entry.cachedInput = (entry.cachedInput ?? 0) + cachedInput;
       entry.input += input; entry.output += output; entry.turns += 1; entry.costUsd += Number(d.costUsd) || 0;
       const provider = d.provider ?? 'unknown';
       entry.providers[provider] = (entry.providers[provider] ?? 0) + input + output;

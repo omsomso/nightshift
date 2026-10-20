@@ -78,6 +78,7 @@ process.stdin.on('end', () => {
       total_cost_usd: 0.0123, usage: { input_tokens: 10, output_tokens: 5 }, permission_denials: [],
       result: JSON.stringify(result), structured_output: result };
     if (mode === 'denial') final.permission_denials = [{ tool_name: 'Bash', tool_use_id: 'toolu_2', tool_input: { command: 'rm -rf build' } }];
+    if (mode === 'read-denial') final.permission_denials = [{ tool_name: 'Read', tool_use_id: 'toolu_4', tool_input: { file_path: '/Users/owner/Desktop/screenshot.png' } }];
     if (mode === 'git-denial') final.permission_denials = [{ tool_name: 'Bash', tool_use_id: 'toolu_3', tool_input: { command: 'git commit -am "step done"' } }];
     // Shapes of a subscription limit: an older text form with an epoch, and a newer event.
     if (mode === 'usage-limit') Object.assign(final, { is_error: true, result: 'Claude AI usage limit reached|' + (Math.floor(Date.now() / 1000) + 3600), structured_output: undefined });

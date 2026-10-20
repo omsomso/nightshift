@@ -45,6 +45,7 @@ export function editWorkerPrompt(task, plan) {
     'Edit files directly in the current directory. You may run commands, including the checks below.',
     'There is no network access. Do not commit, push, or change git history: Nightshift checks, reviews, and commits your change.',
     'Change only what this task needs. Do not weaken, skip, or delete tests to make them pass. Do not touch files outside the allowed paths.',
+    'You can only read and write inside this directory. Put screenshots, logs, and other scratch files in .nightshift-scratch/ here (never committed); anything saved elsewhere cannot be read back. If a request is refused, carry on without it.',
     rulesBlock(plan.rules),
     `Plan brief: ${plan.brief}`,
     `Allowed paths: ${plan.allowedPaths.map(p => p || '(whole repository)').join(', ')}`,
@@ -118,9 +119,11 @@ export function plannerPrompt({ doc, docText, steps, request, rules, base }) {
     docText ? `The document (it may not be committed yet):\n----- ${doc} -----\n${docText.trim()}\n----- end of document -----` : '',
     request ? `The owner adds: ${request}` : '',
     'Rules:',
-    '- One task per step, in the document\'s order. Do not invent, merge, split, or reorder steps. If a step is already done in the code, leave it out and say so in notes.',
+    '- Tasks are milestones, not chores. Each task is one meaningful outcome worth a full agent session: a feature that works, a component in place and used, a behaviour fixed with its test. Small edits (renaming something, rewording a label, changing one value, moving a file, updating a doc line) are never tasks of their own: fold them into the milestone they serve, or into the nearest related task.',
+    '- Follow the document\'s order and cover every step it asks for, but combine adjacent steps that touch the same area or only make sense together. Most plans need 2 to 6 tasks; a long document may need more, a small one may be a single task. Do not invent work the document does not ask for. Say in notes which steps you combined.',
+    '- If a step is already done in the code, leave it out and say so in notes.',
     '- Every task must change files. Do not create check-only tasks ("confirm the baseline", "run all tests", "final verification"): Nightshift itself runs the checks before the first task, after every task, and at the end, and does a final review. Fold such verification into the acceptance criteria of the tasks that change code, and mention dropped check-only steps in notes.',
-    '- Each task: a short kebab-case id, a title, and acceptance criteria that a reviewer can check against the code and the checks.',
+    '- Each task: a short kebab-case id, a title naming the outcome (not the first edit), and acceptance criteria that a reviewer can check against the code and the checks, covering everything folded into it.',
     '- Rate each task\'s difficulty (low, medium, or high) from what you read in the code, with a one-line reason: low for small, local, well-understood changes; high for subtle or risky work (concurrency, real-time or audio threads, data migrations, security, wide refactors). It sets how much reasoning effort the worker starts with.',
     '- checks: commands that already exist in this repository (for example package scripts, make or ctest targets), run without network access, and pass today if you can tell. Prefer fast ones. At least one.',
     '- allowedPaths: the narrowest repository-relative prefixes (directories ending in /, or single files) the steps need, plus any file the agent instructions require updating alongside code changes (for example a roadmap or changelog); [""] only if the whole repository is truly needed.',
@@ -136,7 +139,7 @@ export function chatPrompt({ repo, rules, message }) {
   return [
     `You are Nightshift's plan assistant for the repository at ${repo}. You are read-only: you can read the code, but not change it.`,
     rulesBlock(rules),
-    'Help the owner write a plan document that Nightshift will implement unattended. A good plan has numbered steps in order; each step is one coherent change with a clear, checkable outcome, small enough for one agent session (roughly one commit), and says how to verify it (tests or checks that exist in the repository).',
+    'Help the owner write a plan document that Nightshift will implement unattended. A good plan has numbered steps in order; each step is a milestone: one meaningful outcome with a clear, checkable result (a working feature, a component in place and used, a fix with its test), worth a full agent session, and says how to verify it (tests or checks that exist in the repository). Small edits such as renames, label wording, or single values are folded into the milestone they serve, never steps of their own.',
     'Read the code to make steps concrete. Ask short questions when something important is unclear. Do not invent work the owner did not ask for.',
     'Whenever you propose or revise the document, include the complete document in a single ```markdown fenced block, so Nightshift can save it into the repository.',
     `Owner: ${message}`
@@ -154,7 +157,7 @@ export function interviewPrompt({ projects, rules, notes, repo }) {
     `1. ${repo ? 'Confirm the project' : 'Work out which project the notes are about, reading code to confirm'}, and state it in a block exactly like:\n\`\`\`nightshift-repo\n/absolute/path/to/project\n\`\`\`\nIf the notes cover several projects, pick the one most notes concern and say which notes belong elsewhere.`,
     '2. Read the relevant code and the chosen project\'s own rules (its AGENTS.md / CLAUDE.md) so the steps fit how the project works.',
     '3. Ask what you need to know, a few questions at a time (at most 4 per turn), as multiple choice whenever sensible, in a block exactly like:\n```nightshift-questions\n[{"question": "...", "options": [{"label": "short answer", "detail": "one line on what it means or costs", "recommended": true}, {"label": "...", "detail": "..."}], "multiple": false}]\n```\nKeep labels short; put the explanation in detail. Mark at most one option per question as recommended, and only when you have a reason. The owner may also answer in their own words. Do not ask what the code already answers.',
-    '4. When you know enough, write the complete roadmap in one ```markdown block (every step must change files; no check-only steps, because Nightshift runs the checks itself before, during, and after): a # title, two or three sentences on what it covers and what it leaves out, then numbered steps in a sensible order. Each step is one coherent change with a checkable outcome and says how to verify it (tests or checks that exist in the project), small enough for one agent session (roughly one commit). Include every note the owner wants done; do not add work they did not ask for.',
+    '4. When you know enough, write the complete roadmap in one ```markdown block (every step must change files; no check-only steps, because Nightshift runs the checks itself before, during, and after): a # title, two or three sentences on what it covers and what it leaves out, then numbered steps in a sensible order. Each step is a milestone: one meaningful outcome with a checkable result, worth a full agent session, and says how to verify it (tests or checks that exist in the project). Fold small edits (renames, label wording, single values, doc lines) into the milestone they serve; never make them steps of their own. Most roadmaps have 2 to 6 steps. Include every note the owner wants done; do not add work they did not ask for.',
     '5. Revise the roadmap when asked, always repeating the complete document.',
     `Owner's notes:\n${notes}`
   ].filter(Boolean).join('\n\n');

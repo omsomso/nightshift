@@ -1,3 +1,4 @@
+import { planTokens } from './tokens.js';
 // Renders a plain-Markdown summary for the owner. Labels simulated and unverified results.
 const simulated = task => [task.result?.summary, task.review?.reason].some(text => text?.includes('[SIMULATED]'));
 const line = text => String(text ?? '').replace(/\s+/g, ' ').trim().replace(/\.$/, '');
@@ -69,8 +70,7 @@ function planSection(state) {
   const plan = state.plan;
   const label = { running: 'running', blocked: 'blocked — needs you', 'awaiting-approval': 'ready for your review and merge' }[plan.status] ?? plan.status;
   const dispatches = state.events.filter(e => e.type === 'dispatched').length;
-  const tokens = state.events.filter(e => e.type === 'provider:usage')
-    .reduce((sum, e) => sum + (Number(e.detail?.tokens?.input) || 0) + (Number(e.detail?.tokens?.output) || 0), 0);
+  const tokens = planTokens(state.events);
   const hours = ((plan.finishedAt ? Date.parse(plan.finishedAt) : Date.now()) - Date.parse(plan.startedAt)) / 3_600_000;
   const out = ['', `## Plan \`${plan.id}\`: ${label}`, '',
     `Branch \`${plan.branch}\` from ${plan.baseRef ? `\`${plan.baseRef}\` @ ` : ''}\`${plan.baseCommit.slice(0, 12)}\` in \`${plan.repo}\`; worktree \`${plan.worktree}\`.`,

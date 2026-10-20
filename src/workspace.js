@@ -1,12 +1,15 @@
 import { execFileSync, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, realpathSync } from 'node:fs';
+import { existsSync, realpathSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { protectedPaths } from './plan.js';
 import { checkCommand, sandboxHint } from './sandbox.js';
 import { dirname } from 'node:path';
 
 const reviewDiffChars = 60_000;
+// Inside the working copy, for screenshots, logs, and other scratch files agents make. Its own
+// .gitignore keeps it out of every change and commit.
+export const scratchDir = '.nightshift-scratch';
 const checkOutputChars = 8_000;
 
 function git(cwd, args, options = {}) {
@@ -35,6 +38,13 @@ export class Workspace {
     git(repo, ['worktree', 'add', '-b', branch, worktree, baseCommit]);
     return new Workspace({ repo, worktree: realpathSync(worktree), branch, baseCommit,
       checks: plan.checks, allowedPaths: plan.allowedPaths, limits: plan.limits });
+  }
+
+  ensureScratch() {
+    const dir = join(this.worktree, scratchDir);
+    mkdirSync(dir, { recursive: true });
+    if (!existsSync(join(dir, '.gitignore'))) writeFileSync(join(dir, '.gitignore'), '*\n');
+    return dir;
   }
 
   // Stages everything and describes the change since the last commit on the branch.

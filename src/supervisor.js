@@ -1,5 +1,6 @@
 import { workerEffort, reviewerEffort } from './effort.js';
 import { readConfig } from './home.js';
+import { planTokens } from './tokens.js';
 
 export class BlockedError extends Error {}
 // Both of these block the task and pause the whole queue.
@@ -166,8 +167,7 @@ export class Supervisor {
     const plan = this.state.plan;
     if (!plan || plan.status !== 'running') return false;
     const dispatches = this.state.events.filter(e => e.type === 'dispatched').length;
-    const tokens = this.state.events.filter(e => e.type === 'provider:usage')
-      .reduce((sum, e) => sum + (Number(e.detail?.tokens?.input) || 0) + (Number(e.detail?.tokens?.output) || 0), 0);
+    const tokens = planTokens(this.state.events);
     const hours = (Date.now() - Date.parse(plan.startedAt)) / 3_600_000;
     const reached = dispatches >= plan.limits.dispatches ? `${dispatches} dispatches (limit ${plan.limits.dispatches})`
       : tokens >= plan.limits.tokens ? `${tokens.toLocaleString('en-US')} tokens (limit ${plan.limits.tokens.toLocaleString('en-US')})`
@@ -231,6 +231,7 @@ export class Supervisor {
         this.store.save(this.state);
         return true;
       }
+      this.workspace?.ensureScratch?.();
       task.status = 'running';
       task.attempts += 1;
       const effort = effortFor('worker');
