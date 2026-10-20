@@ -55,14 +55,13 @@ test('claude adapter resumes the saved session instead of starting a new one', a
 });
 
 for (const [mode, pattern] of [
-  ['denial', /requires human handling: denied Bash/], ['error-result', /error_max_turns/],
+  ['error-result', /error_max_turns/],
   ['disconnect', /disconnected/], ['malformed', /Claude stream failure/], ['oversize', /size limit/],
   ['bad-output', /not JSON/], ['wrong-session', /different session/], ['not-logged-in', /Claude turn error: Not logged in/]
 ]) {
   test(`claude adapter fails explicitly on ${mode}`, async () => {
     const events = [];
     await assert.rejects(() => new ClaudeAdapter(options(mode)).execute(sampleTask, { onEvent: event => events.push(event) }), pattern);
-    if (mode === 'denial') assert.equal(events.find(x => x.type === 'approval-required').tool, 'Bash');
   });
 }
 
@@ -304,11 +303,16 @@ test('smoke command refuses an unpinned Claude runtime before creating state', t
   assert.equal(existsSync(f.stateDirectory), false);
 });
 
-test('a denied git commit is recorded but does not block, unlike other denials', async () => {
-  const events = [];
-  const result = await new ClaudeAdapter(options('git-denial')).execute(sampleTask, { onEvent: event => events.push(event) });
-  assert.equal(result.summary, 'Fixture résumé 🦉');
-  const denied = events.find(x => x.type === 'policy-denied');
-  assert.match(denied.command, /^git commit/);
-  assert.equal(events.some(x => x.type === 'approval-required'), false);
-});
+for (const [mode, check] of [
+  ['git-denial', denied => assert.match(denied.command, /^git commit/)],
+  ['read-denial', denied => assert.deepEqual([denied.tool, denied.target], ['Read', '/Users/owner/Desktop/screenshot.png'])],
+  ['denial', denied => assert.match(denied.command, /^rm -rf build/)]
+]) {
+  test(`a denied request (${mode}) is recorded and the turn's result still counts: it never blocks the task`, async () => {
+    const events = [];
+    const result = await new ClaudeAdapter(options(mode)).execute(sampleTask, { onEvent: event => events.push(event) });
+    assert.equal(result.summary, 'Fixture résumé 🦉');
+    check(events.find(x => x.type === 'policy-denied'));
+    assert.equal(events.some(x => x.type === 'approval-required'), false);
+  });
+}

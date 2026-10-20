@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Store } from './store.js';
 import { Supervisor } from './supervisor.js';
-import { Workspace } from './workspace.js';
+import { Workspace, scratchDir } from './workspace.js';
 import { validatePlan } from './plan.js';
 import { planDir, listPlanIds } from './home.js';
 import { collectRules } from './rules.js';
@@ -12,6 +12,7 @@ import { resolveBase } from './base.js';
 import { validateEffort } from './effort.js';
 import { readConfig } from './home.js';
 import { advanceQueue, readQueue } from './queue.js';
+import { planTokens } from './tokens.js';
 
 const cliFile = fileURLToPath(new URL('./cli.js', import.meta.url));
 const git = (cwd, ...args) => execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
@@ -138,6 +139,7 @@ export async function mergePlan(id, { style = readConfig().mergeStyle ?? 'local'
   } finally {
     if (temporary) { try { git(repo, 'worktree', 'remove', '--force', temporary); } catch {} }
   }
+  rmSync(join(worktree, scratchDir), { recursive: true, force: true });
   try { git(repo, 'worktree', 'remove', worktree); } catch {}
   const store = new Store(dir);
   store.acquire();
@@ -175,6 +177,7 @@ export async function openPullRequest(id) {
   const output = execFileSync(gh, ['pr', 'create', '--base', base, '--head', plan.branch, '--title', title, '--body', body],
     { cwd: plan.repo, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
   const url = output.trim().split('\n').filter(line => /^https?:\/\//.test(line)).at(-1) ?? output.trim();
+  rmSync(join(plan.worktree, scratchDir), { recursive: true, force: true });
   try { git(plan.repo, 'worktree', 'remove', plan.worktree); } catch {}
   const store = new Store(dir);
   store.acquire();
@@ -245,8 +248,7 @@ export function summarize(id) {
       queued: queuePosition(id), agents: draft.agents, source: draft.source, tasks: draft.plan.tasks.map(t => ({ ...t, status: 'draft' })), runner: false } : null;
   }
   const dispatches = state.events.filter(e => e.type === 'dispatched').length;
-  const tokens = state.events.filter(e => e.type === 'provider:usage')
-    .reduce((sum, e) => sum + (Number(e.detail?.tokens?.input) || 0) + (Number(e.detail?.tokens?.output) || 0), 0);
+  const tokens = planTokens(state.events);
   const hours = ((plan.finishedAt ? Date.parse(plan.finishedAt) : Date.now()) - Date.parse(plan.startedAt)) / 3_600_000;
   const current = state.tasks.find(t => ['running', 'review'].includes(t.status));
   const blocked = state.tasks.find(t => t.status === 'blocked');

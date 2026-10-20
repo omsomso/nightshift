@@ -27,10 +27,14 @@ with them before drafting anything:
 3. Ask what the code cannot answer, a few questions at a time, as multiple choice where
    sensible (use your question tool if you have one). Do not ask what the code settles.
 4. Write the complete roadmap into the project, for example `docs/plans/<topic>.md`: a
-   title, two or three sentences on scope, then numbered steps in order, each one
-   coherent change with a checkable outcome and how to verify it, small enough for one
-   agent session. Include every note the owner wants done and nothing they did not ask
-   for. Show it and revise until the owner is happy.
+   title, two or three sentences on scope, then numbered steps in order. **Each step is a
+   milestone**: one meaningful outcome with a checkable result (a working feature, a
+   component in place and used, a fix with its test) and how to verify it, worth a full
+   agent session. Every step costs a worker, the checks, and a reviewer, so never make a
+   step of a small edit (a rename, label wording, one value, a doc line): fold it into the
+   milestone it serves. Most roadmaps have 2 to 6 steps. No check-only steps (Nightshift
+   runs the checks itself). Include every note the owner wants done and nothing they did
+   not ask for. Show it and revise until the owner is happy.
 5. Continue with "Starting a plan" below, drafting from that document.
 
 The Nightshift app's New Plan window runs this same interview, if the owner prefers it.

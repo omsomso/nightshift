@@ -386,7 +386,9 @@ s += [shot('app-draft.png', FULL, 'A draft. The sidebar lists every plan and the
           P('Editing a draft', h2),
           P('<b>Edit</b> opens the whole plan: reword a task or its "done when", move tasks up and down, remove one, or add your '
             'own. The checks are one command per line; the allowed folders limit what the work may touch.'),
-          P('Each task has a <b>difficulty</b> (low, medium, high) chosen by the planner. It sets how much effort the worker starts '
+          P('<b>Steps are milestones.</b> Each task is one meaningful outcome worth a full agent session. Small edits such as a rename '
+        'are folded into the milestone they serve, because every task costs a worker, the checks, and a review.'),
+      P('Each task has a <b>difficulty</b> (low, medium, high) chosen by the planner. It sets how much effort the worker starts '
             'with, and every retry goes one level higher. Change it if you disagree.'),
           P('Nothing runs until you press Approve and Start.', small)])]
 
@@ -470,24 +472,25 @@ s += [table([['Agents can', 'Agents cannot'],
              ['', 'Change protected files: AGENTS.md, CLAUDE.md, .github/, .claude/, .codex/.'],
              ['', 'Add tasks, change limits, or approve their own work.']],
             [FULL / 2, FULL / 2]),
-      P('<b>Your checks are fenced too.</b> Nightshift runs the project\'s tests and builds in a macOS sandbox: they may write '
-        'only inside the plan\'s copy, temporary folders, and tool caches, with no network. A build step that tries to write into '
-        'your own checkout fails, with a note saying the sandbox stopped it. You can relax this in Settings › Runs.'),
+      P('<b>Your checks are fenced too.</b> Tests and builds run in a macOS sandbox: writes only in the plan\'s copy, temp folders, '
+        'and tool caches; no network. A build step that writes into your checkout fails with a note. Settings › Runs can relax it.'),
+      P('<b>A refusal does not stop the night.</b> An agent that tries something it may not do is told no and carries on; Activity '
+        'shows it. Screenshots and scratch files go in ' + m('.nightshift-scratch') + ' in the copy, never committed.'),
       P('<b>Project rules travel with the plan.</b> Nightshift gives every agent the project\'s AGENTS.md and CLAUDE.md. Where they '
         'ask for something Nightshift forbids (commit, push, install), Nightshift wins and the step is left for you.'),
-      P('<b>Billing.</b> Only subscription sign-ins are used; API keys are stripped, a pay-per-token sign-in is refused, and a turn '
-        'that reports one stops the plan. For extra safety keep Usage credits off (or capped) in claude.ai.'),
-      P('Kill switches', h2),
+      P('<b>Billing.</b> Subscription sign-ins only: API keys are stripped and a pay-per-token sign-in is refused. Keep Usage credits '
+        'off (or capped) in claude.ai for extra safety.'),
+      KeepTogether([P('Kill switches', h2),
       table([['Limit', 'Default', 'When reached'],
              ['Attempts per task', '3', 'The task stops for you.'],
              ['Time per agent turn', '20 minutes', 'The turn is stopped; the task stops for you.'],
              ['Attempts per plan', '3 per task + 2', 'The plan pauses.'],
-             ['Tokens per plan', '5 million', 'The plan pauses.'],
+             ['New tokens per plan', '5 million', 'The plan pauses. Cache re-reads do not count.'],
              ['Time per plan', '6 hours', 'The plan pauses.'],
              ['Changed lines per task', '800', 'The worker is asked for a smaller change.'],
              ['Time per check', '10 minutes', 'The check fails.'],
              ['Fix-up rounds at the end', '1', 'The plan stops for you.']],
-            [60 * mm, 32 * mm, FULL - 92 * mm], bold_first=True),
+            [60 * mm, 32 * mm, FULL - 92 * mm], bold_first=True)]),
       P('Raise a limit on a running plan with ' + m('nightshift limit tokens 8000000 --plan ID') + ', then resume.', small)]
 
 # ── Part 8: Settings and usage ─────────────────────────────────────────────────
