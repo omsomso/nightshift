@@ -2,15 +2,18 @@ import { readFileSync } from 'node:fs';
 import { difficulties, validateEffort } from './effort.js';
 import { resolve, dirname } from 'node:path';
 
-// Defaults from docs/EDIT_MODE.md. A plan file may lower or raise any of them.
+// Defaults from docs/EDIT_MODE.md. A plan file may lower or raise any of them. They are
+// worst cases with a wide margin, so an unattended plan is never stopped by a slow but
+// healthy task: real milestones took 15 to 30 minutes per turn and about 2M new tokens
+// per plan. They exist to catch runaways, not to pace the work.
 export const defaultLimits = {
   attemptsPerTask: 3,
-  turnMinutes: 20,
+  turnMinutes: 120,
   dispatches: null, // null: 3 × tasks + 2
-  tokens: 5_000_000, // input (including cached) + output, all turns of the plan
-  hours: 6,
-  changedLinesPerTask: 800,
-  checkMinutes: 10,
+  tokens: 20_000_000, // new tokens (input minus cache re-reads, plus output), all turns of the plan
+  hours: 24,
+  changedLinesPerTask: 3000,
+  checkMinutes: 60,
   fixupRounds: 1 // fix-up tasks Nightshift may add after a failed final review or final checks; 0 disables
 };
 

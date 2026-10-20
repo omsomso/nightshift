@@ -494,3 +494,47 @@ test('the planner and the interviewer ask for milestones, not chores', async () 
   const interview = interviewPrompt({ notes: 'x', projects: [] });
   assert.match(interview, /Each step is a milestone/);
 });
+
+test('a timed-out turn is not a blocker: the task runs again, told what the last attempt left behind', async t => {
+  const env = makeRepo(t);
+  const { TurnTimeoutError } = await import('../src/supervisor.js');
+  const seen = [];
+  const worker = { async execute(task, { plan }) {
+    seen.push({ attempt: task.attempts, leftover: task.leftover, timedOut: task.timedOut });
+    if (task.id === 'one' && task.attempts === 1) {
+      writeFileSync(join(plan.worktree, 'notes', 'one.txt'), 'half done\n');
+      throw new TurnTimeoutError('Claude', 120);
+    }
+    writeFileSync(join(plan.worktree, 'notes', `${task.id}.txt`), `${task.id}\n`);
+    return { summary: 'done', evidence: [`notes/${task.id}.txt`] };
+  } };
+  const { store, supervisor } = startPlan(t, env, worker, scriptedReviewer());
+  await supervisor.run();
+  const state = store.read();
+  assert.equal(state.plan.status, 'awaiting-approval');
+  assert.deepEqual(state.tasks.map(x => [x.id, x.status, x.attempts]), [['one', 'done', 2], ['two', 'done', 1]]);
+  assert.deepEqual(seen[1], { attempt: 2, leftover: ['notes/one.txt'], timedOut: { minutes: 120, at: seen[1].timedOut.at } });
+  assert.ok(state.events.some(e => e.type === 'turn-timeout' && /ran past 120 minutes[\s\S]*next attempt continues/.test(e.detail)));
+  const { editWorkerPrompt } = await import('../src/prompts.js');
+  const prompt = editWorkerPrompt({ ...state.tasks[0], attempts: 2, leftover: ['notes/one.txt'], timedOut: { minutes: 120 } }, state.plan);
+  assert.match(prompt, /ran out of time after 120 minutes/);
+  assert.match(prompt, /uncommitted changes from an earlier attempt \(notes\/one\.txt\)/);
+  assert.match(prompt, /sandbox without a window server or network/);
+});
+
+test('a timeout on the last attempt blocks with advice to raise the time per turn', async t => {
+  const env = makeRepo(t);
+  const { TurnTimeoutError } = await import('../src/supervisor.js');
+  const worker = { async execute() { throw new TurnTimeoutError('Claude', 120); } };
+  const { store, supervisor } = startPlan(t, env, worker, scriptedReviewer(), { limits: { attemptsPerTask: 2 } });
+  await supervisor.run();
+  const one = store.read().tasks[0];
+  assert.equal(one.status, 'blocked');
+  assert.match(one.reason, /last attempt \(2 of 2\)[\s\S]*raise the time per turn \(limit turnMinutes\)/);
+});
+
+test('new plans get generous limits by default', async () => {
+  const { defaultLimits } = await import('../src/plan.js');
+  assert.deepEqual([defaultLimits.turnMinutes, defaultLimits.hours, defaultLimits.checkMinutes, defaultLimits.changedLinesPerTask, defaultLimits.tokens],
+    [120, 24, 60, 3000, 20_000_000]);
+});

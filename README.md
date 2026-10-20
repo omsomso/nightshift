@@ -71,8 +71,9 @@ node src/cli.js discard <id> --yes                     # remove a plan (unmerged
 node src/cli.js merge <id>                             # approve: merge the plan's branch into the branch it started from
 ```
 
-`discard` without `--yes` only lists what it would remove, including how many accepted
-commits on an unmerged plan's branch would be lost. It refuses while the plan's runner is
+`discard` without `--yes` only lists what it would remove, including how many commits
+exist on no other branch and would be lost; a step that fails (for example a worktree
+already removed) never leaves a half-deleted plan. It refuses while the plan's runner is
 alive (stop it first). For a merged plan it removes only the record, and the plan branch
 when the merge contains it; the merged work stays. In the app: Delete… in a plan's view,
 the sidebar's right-click menu, or the Delete key (each asks first, and stops a running
@@ -121,6 +122,8 @@ command:
 | Review | `review <id>`: each task's diff, review verdict, and checks; the whole plan's diff and final review. |
 | Live activity | `activity <id>`: what the agents did most recently (tools and files, checks, reviews, commits). |
 | Fix it yourself | `fix-prompt <id>` gives an interactive Claude session the context (the app's Fix with Claude opens it in Terminal); `accept <task> --plan <id>` then checks your fix and commits it as the task. |
+| Limits | `limit <name> <value> --plan <id>` applies at once (the app: Limits › Change…); defaults are generous worst cases. A turn that runs out of time is retried with its changes kept. |
+| Merged elsewhere | `list` and `sync` notice plans merged by hand or on GitHub; the app moves them to the sidebar's archive. |
 | Pull request | `merge <id> --pr` pushes the plan branch and opens a pull request into the starting branch with `gh`; `settings set mergeStyle pr` makes it the default. |
 | Usage | `usage`: tokens and turns per plan and per day. |
 

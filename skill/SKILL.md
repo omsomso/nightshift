@@ -94,10 +94,12 @@ nightshift logs <id>                  # runner log
 nightshift pause --plan <id>          # resume --plan <id>
 nightshift interrupt --plan <id>      # stop the running turn now; the plan pauses
 nightshift retry <task-id> --plan <id>   # after a blocker is understood; then resume
-nightshift limit tokens 8000000 --plan <id>
+nightshift limit turnMinutes 180 --plan <id>   # applies at once, also to the running turn
+nightshift sync                       # notice plans merged on GitHub or by hand
 ```
 
-When a plan is blocked, read the reason from `report` and explain it to the user; do not
+Limits are generous by default and apply at once when changed; there is no need to pause
+or restart a plan to raise one. When a plan is blocked, read the reason from `report` and explain it to the user; do not
 retry or raise limits without their agreement. If the user wants to fix it with you, run
 `nightshift fix-prompt <id>` for the context and work in the directory it names (do not
 commit there); when it is fixed, the user accepts it with `nightshift accept <task> --plan <id>`.

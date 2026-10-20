@@ -3,6 +3,14 @@ import AppKit
 
 struct ContentView: View {
     @Environment(AppModel.self) private var model
+    @AppStorage("showArchive") private var showArchive = false
+
+    private func row(_ plan: Plan) -> some View {
+        PlanRow(plan: plan).tag(plan.id)
+            .contextMenu {
+                Button(AppModel.deleteTitle(plan) + "…", role: .destructive) { model.pendingDelete = plan }
+            }
+    }
     @Environment(\.openWindow) private var openWindow
     @Environment(\.openSettings) private var openSettings
 
@@ -10,11 +18,14 @@ struct ContentView: View {
         @Bindable var model = model
         NavigationSplitView {
             List(selection: $model.selection) {
-                ForEach(model.plans) { plan in
-                    PlanRow(plan: plan).tag(plan.id)
-                        .contextMenu {
-                            Button(AppModel.deleteTitle(plan) + "…", role: .destructive) { model.pendingDelete = plan }
-                        }
+                ForEach(model.plans.filter { !$0.isArchived }) { plan in row(plan) }
+                let archived = model.plans.filter(\.isArchived)
+                if !archived.isEmpty {
+                    Section(isExpanded: $showArchive) {
+                        ForEach(archived) { plan in row(plan) }
+                    } header: {
+                        Text("Archive · \(archived.count) merged")
+                    }
                 }
             }
             .onDeleteCommand { model.pendingDelete = model.selectedPlan }
@@ -94,8 +105,8 @@ struct StatusIcon: View {
             switch plan.status {
             case "draft": return ("doc.text", .secondary)
             case "awaiting-approval": return ("checkmark.seal.fill", .green)
-            case "merged": return ("arrow.triangle.merge", .secondary)
-            case "pr-open": return ("arrow.triangle.pull", .purple)
+            case "merged": return ("arrow.triangle.merge", .purple)
+            case "pr-open": return ("arrow.triangle.pull", .green)
             case "blocked": return ("exclamationmark.octagon.fill", .red)
             default:
                 if plan.blockedTask != nil { return ("exclamationmark.octagon.fill", .red) }
@@ -196,9 +207,7 @@ struct PlanDetail: View {
             if plan.status == "running" || plan.status == "blocked" { ActivityCard(plan: plan) }
             overview
             tasks
-            if let limits = plan.limits, plan.status != "draft" {
-                Card(title: "Limits", symbol: "gauge.with.dots.needle.33percent") { LimitsView(limits: limits) }
-            }
+            if !plan.isArchived && !["pr-open", "awaiting-approval"].contains(plan.status) { LimitsCard(plan: plan) }
             if let log = plan.log, !log.isEmpty, plan.status != "draft" {
                 Card(title: "Runner log", symbol: "text.alignleft", trailing: {
                     Button(showLog ? "Hide" : "Show") { withAnimation { showLog.toggle() } }.buttonStyle(.link)
@@ -262,10 +271,14 @@ struct PlanDetail: View {
             return NextStep(title: "Ready to merge", symbol: "checkmark.seal.fill", tint: .green,
                             text: plan.finalReview ?? "Every task and the final review passed. Look at the branch, then merge it into \(plan.baseBranch ?? "the branch it started from").")
         case "merged":
-            return NextStep(title: "Merged into \(plan.baseBranch ?? "its branch")", symbol: "arrow.triangle.merge", tint: .secondary,
-                            text: "Done. Nothing was pushed; push \(plan.baseBranch ?? "the branch") yourself when you are ready.")
+            let date = { (iso: String?) in iso.flatMap { ISO8601DateFormatter.withFractions.date(from: $0) ?? ISO8601DateFormatter().date(from: $0) }
+                .map { $0.formatted(date: .abbreviated, time: .shortened) } }
+            let outside = plan.mergedOutside.map { how in
+                "Merged outside Nightshift: \(how)" + (date(plan.mergedAt).map { ", on \($0)" } ?? date(plan.noticedAt).map { "; noticed \($0)" } ?? "") + ". It is in the archive." }
+            return NextStep(title: "Merged into \(plan.baseBranch ?? "its branch")", symbol: "arrow.triangle.merge", tint: .purple,
+                            text: outside ?? "Done\(date(plan.mergedAt).map { " on \($0)" } ?? ""). Nothing was pushed; push \(plan.baseBranch ?? "the branch") yourself when you are ready.")
         case "pr-open":
-            return NextStep(title: "Pull request open", symbol: "arrow.triangle.pull", tint: .purple,
+            return NextStep(title: "Pull request open", symbol: "arrow.triangle.pull", tint: .green,
                             text: "The branch was pushed and a pull request into \(plan.baseBranch ?? "its base branch") is waiting on GitHub\(plan.pullRequest.map { ": \($0)" } ?? ".") Merge it there.")
         default:
             if plan.status == "blocked" || plan.blockedTask != nil {
@@ -278,8 +291,10 @@ struct PlanDetail: View {
                                 text: "The subscription's usage limit was reached. Nightshift continues by itself at \(when); the interrupted attempt does not count.")
             }
             if plan.isPaused {
+                let at = plan.pauseReason.flatMap { ISO8601DateFormatter.withFractions.date(from: $0.at) }
+                    .map { " (\($0.formatted(date: .omitted, time: .shortened)))" } ?? ""
                 return NextStep(title: "Paused", symbol: "pause.circle.fill", tint: .orange,
-                                text: plan.blocker ?? "Resume to continue with the next task.")
+                                text: (plan.pauseReason.map { "\($0.text)\(at)." } ?? plan.blocker ?? "Paused.") + " Resume to continue with the next task.")
             }
             if !plan.runner {
                 return NextStep(title: "Runner stopped", symbol: "stop.circle", tint: .secondary,
@@ -565,6 +580,8 @@ struct NextStep {
 struct NextStepPanel<Controls: View>: View {
     let step: NextStep
     @ViewBuilder let controls: Controls
+    @State private var expanded = false
+    private var long: Bool { step.text.count > 600 || step.text.filter { $0 == "\n" }.count > 6 }
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
@@ -575,6 +592,10 @@ struct NextStepPanel<Controls: View>: View {
                     Text(step.title).font(.title3.weight(.semibold))
                 }
                 Text(step.text).font(.callout).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                    .lineLimit(long && !expanded ? 6 : nil)
+                if long {
+                    Button(expanded ? "Show less" : "Show more") { withAnimation { expanded.toggle() } }.buttonStyle(.link).font(.caption)
+                }
                 controls
             }
             .padding(14)
@@ -623,8 +644,8 @@ struct StatusPill: View {
         let (text, color): (String, Color) = switch plan.status {
         case "draft": ("Draft", .blue)
         case "awaiting-approval": ("Ready to merge", .green)
-        case "merged": ("Merged", .secondary)
-        case "pr-open": ("Pull request", .purple)
+        case "merged": ("Merged", .purple)
+        case "pr-open": ("Pull request open", .green)
         case "blocked": ("Blocked", .red)
         default:
             plan.blockedTask != nil ? ("Blocked", .red) : plan.isWaitingForLimit ? ("Waiting", .orange) : plan.isPaused ? ("Paused", .orange) : plan.runner ? ("Running", .accentColor) : ("Stopped", .secondary)

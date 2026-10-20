@@ -191,46 +191,109 @@ export async function openPullRequest(id) {
   return { url, base, branch: plan.branch };
 }
 
-// Removes a plan: a draft's directory; an unmerged plan's worktree, branch (its unmerged
-// commits are lost), and directory; or a merged plan's record (its work stays where it was
-// merged, and the branch goes only if the merge contains it). Without `confirm` it only
-// describes what it would remove.
+// Removes a plan: a draft's directory, or a started plan's worktree, branch, and record.
+// Commits that exist on no other branch (local or remote) are named as lost; work already
+// merged or pushed elsewhere is not. Each step is tried on its own, so a missing worktree or
+// branch never leaves a half-deleted plan behind. Without `confirm` it only describes it.
 export function discardPlan(id, { confirm = false } = {}) {
   const dir = planDir(id);
   const state = Store.inspect(dir);
   const plan = state.plan;
   if (!plan && !readDraft(dir)) throw new Error(`No plan or draft named ${id}.`);
   if (state.runner?.alive) throw new Error(`Plan ${id} has a running runner (pid ${state.runner.pid}); stop it first with \`stop ${id}\`.`);
-  const branchExists = Boolean(plan) && tryGit(plan.repo, 'rev-parse', '--verify', '--quiet', `refs/heads/${plan.branch}`) !== null;
-  if (plan?.status === 'pr-open') {
-    const removes = [`plan record ${dir}`, ...(branchExists ? [`local branch ${plan.branch} (the pull request and its remote branch stay on GitHub)`] : [])];
-    if (!confirm) return { removed: false, removes };
-    if (existsSync(plan.worktree)) tryGit(plan.repo, 'worktree', 'remove', '--force', plan.worktree);
-    if (branchExists) git(plan.repo, 'branch', '-D', plan.branch);
-    rmSync(dir, { recursive: true, force: true });
-    return { removed: true, removes };
+  if (!plan) {
+    const removes = [`draft directory ${dir}`];
+    if (confirm) rmSync(dir, { recursive: true, force: true });
+    return { removed: confirm, removes, problems: [] };
   }
-  if (plan?.status === 'merged') {
-    const contained = branchExists && plan.mergeCommit && tryGit(plan.repo, 'merge-base', '--is-ancestor', plan.branch, plan.mergeCommit) !== null;
-    const removes = [`plan record ${dir}`, ...(contained ? [`branch ${plan.branch} (already merged)`] : [])];
-    if (!confirm) return { removed: false, removes };
-    if (existsSync(plan.worktree)) tryGit(plan.repo, 'worktree', 'remove', '--force', plan.worktree);
-    if (contained) git(plan.repo, 'branch', '-D', plan.branch);
-    rmSync(dir, { recursive: true, force: true });
-    return { removed: true, removes };
-  }
-  const unmerged = branchExists ? Number(tryGit(plan.repo, 'rev-list', '--count', `${plan.baseCommit ?? plan.base}..${plan.branch}`) ?? 0) : 0;
-  const removes = plan ? [`worktree ${plan.worktree}`,
-    `branch ${plan.branch} in ${plan.repo}${unmerged ? ` (${unmerged} commit${unmerged === 1 ? '' : 's'} not merged anywhere; ${unmerged === 1 ? 'it is' : 'they are'} lost)` : ''}`,
-    `directory ${dir}`] : [`draft directory ${dir}`];
-  if (!confirm) return { removed: false, removes, unmerged };
-  if (plan) {
+  const branchExists = tryGit(plan.repo, 'rev-parse', '--verify', '--quiet', `refs/heads/${plan.branch}`) !== null;
+  const unmerged = branchExists ? Number(tryGit(plan.repo, 'rev-list', '--count', plan.branch, '--not',
+    `--exclude=${plan.branch}`, '--branches', `--exclude=origin/${plan.branch}`, '--remotes') ?? 0) : 0;
+  const pushed = branchExists && tryGit(plan.repo, 'rev-parse', '--verify', '--quiet', `refs/remotes/origin/${plan.branch}`) !== null;
+  const removes = [
+    ...(existsSync(plan.worktree) ? [`worktree ${plan.worktree}`] : []),
+    ...(branchExists ? [`branch ${plan.branch} in ${plan.repo}${unmerged
+      ? ` (${unmerged} commit${unmerged === 1 ? '' : 's'} on no other branch; ${unmerged === 1 ? 'it is' : 'they are'} lost)`
+      : ' (its work is merged or kept elsewhere)'}`] : []),
+    `plan record ${dir}`,
+    ...(pushed || plan.status === 'pr-open' ? ['(the pull request and the remote branch stay on GitHub)'] : [])];
+  if (!confirm) return { removed: false, removes, unmerged, problems: [] };
+  const problems = [];
+  const step = (label, work) => { try { work(); } catch (error) { problems.push(`${label}: ${String(error.stderr || error.message).trim().split('\n')[0]}`); } };
+  step('worktree', () => {
     if (existsSync(plan.worktree)) git(plan.repo, 'worktree', 'remove', '--force', plan.worktree);
     else git(plan.repo, 'worktree', 'prune');
-    if (branchExists) git(plan.repo, 'branch', '-D', plan.branch);
-  }
+  });
+  if (branchExists) step('branch', () => git(plan.repo, 'branch', '-D', plan.branch));
   rmSync(dir, { recursive: true, force: true });
-  return { removed: true, removes };
+  return { removed: true, removes, problems };
+}
+
+// A plan approved outside Nightshift (merged on GitHub, or by hand) is marked merged, so it
+// moves to the archive. Locally: the plan branch's commits are in the starting branch (or
+// its origin copy). With `network`: origin is fetched first, and an open pull request is
+// asked about with gh, which also catches squash merges.
+export async function syncMerges({ network = false } = {}) {
+  const marked = [];
+  for (const id of listPlanIds()) {
+    let state;
+    try { state = Store.inspect(planDir(id)); } catch { continue; }
+    const plan = state.plan;
+    if (!plan || !['awaiting-approval', 'pr-open'].includes(plan.status)) continue;
+    const found = mergedElsewhere(plan, state, { network });
+    if (!found) continue;
+    try { if (await markMerged(id, found)) marked.push({ id, ...found }); }
+    catch (error) { console.error(`${id}: merged elsewhere, but could not be marked: ${error.message}`); }
+  }
+  return marked;
+}
+
+function mergedElsewhere(plan, state, { network }) {
+  const base = plan.baseBranch ?? 'main';
+  const hasOrigin = tryGit(plan.repo, 'remote', 'get-url', 'origin') !== null;
+  if (network && hasOrigin) tryGit(plan.repo, 'fetch', '--quiet', 'origin', base);
+  const tip = tryGit(plan.repo, 'rev-parse', '--verify', '--quiet', `refs/heads/${plan.branch}`) ?? state.tasks.findLast(t => t.commit)?.commit;
+  if (tip && tip !== plan.baseCommit) {
+    for (const ref of [`refs/heads/${base}`, `refs/remotes/origin/${base}`]) {
+      if (tryGit(plan.repo, 'rev-parse', '--verify', '--quiet', ref) === null) continue;
+      if (tryGit(plan.repo, 'merge-base', '--is-ancestor', tip, ref) !== null) return { how: `its commits are in ${ref.replace(/^refs\/(heads|remotes)\//, '')}` };
+    }
+  }
+  if (network && plan.status === 'pr-open' && plan.pullRequest) {
+    try {
+      const pr = JSON.parse(execFileSync(process.env.NIGHTSHIFT_GH_BIN ?? 'gh', ['pr', 'view', plan.pullRequest, '--json', 'state,mergedAt'],
+        { cwd: plan.repo, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 30_000 }));
+      if (pr.state === 'MERGED') return { how: 'its pull request was merged on GitHub', at: pr.mergedAt };
+    } catch {}
+  }
+  return null;
+}
+
+async function markMerged(id, found) {
+  const dir = planDir(id);
+  try { await stopRunner(id, { waitMs: 5000 }); } catch { return false; } // still busy; next time
+  const plan = Store.inspect(dir).plan;
+  rmSync(join(plan.worktree, scratchDir), { recursive: true, force: true });
+  tryGit(plan.repo, 'worktree', 'remove', plan.worktree); // only if clean; otherwise it stays
+  const store = new Store(dir);
+  store.acquire();
+  try {
+    const supervisor = new Supervisor(store, null, null);
+    // mergedAt only when GitHub says when; noticedAt is when Nightshift saw it.
+    Object.assign(supervisor.state.plan, { status: 'merged', ...(found.at ? { mergedAt: found.at } : {}), noticedAt: new Date().toISOString(), mergedOutside: found.how });
+    supervisor.record(null, 'merge-detected', `Merged outside Nightshift: ${found.how}.`);
+    store.save(supervisor.state);
+  } finally { store.release(); }
+  return true;
+}
+
+// Why a plan is paused, in words: the last event that paused it.
+function pauseReason(state) {
+  if (!state.paused) return null;
+  const event = [...state.events].reverse().find(e => ['paused', 'plan-limit', 'dispatch-cap-reached', 'usage-limit', 'billing-guard', 'interrupted', 'plan-blocked'].includes(e.type));
+  if (!event) return null;
+  const text = typeof event.detail === 'string' ? event.detail.replace(/\.?\s*Applies before the next dispatch\.$/, '') : event.type;
+  return { at: event.at, type: event.type, text: text || 'Paused' };
 }
 
 const queuePosition = id => { const at = readQueue().indexOf(id); return at < 0 ? null : at + 1; };
@@ -245,7 +308,7 @@ export function summarize(id) {
     return draft ? { id, dir, status: 'draft', repo: draft.plan.repo, brief: draft.plan.brief, notes: draft.notes, rules: draft.rules ?? [],
       baseRef: draft.plan.baseRef ?? null, baseCommit: draft.plan.base ?? null, baseBranch: draft.plan.baseBranch ?? null,
       baseSubject: draft.baseInfo?.subject ?? null, baseDate: draft.baseInfo?.date ?? null, warnings: (draft.warnings ?? []).map(w => w.message),
-      queued: queuePosition(id), agents: draft.agents, source: draft.source, tasks: draft.plan.tasks.map(t => ({ ...t, status: 'draft' })), runner: false } : null;
+      queued: queuePosition(id), agents: draft.agents, source: draft.source, limitSettings: draft.plan.limits, tasks: draft.plan.tasks.map(t => ({ ...t, status: 'draft' })), runner: false } : null;
   }
   const dispatches = state.events.filter(e => e.type === 'dispatched').length;
   const tokens = planTokens(state.events);
@@ -261,6 +324,8 @@ export function summarize(id) {
     brief: plan.brief, startedAt: plan.startedAt, finishedAt: plan.finishedAt ?? null,
     blocker: plan.reason ?? blocked?.reason ?? null, current: current ? { id: current.id, title: current.title, status: current.status } : null,
     finalReview: plan.final?.review?.reason ?? null, pullRequest: plan.pullRequest ?? null,
+    mergedAt: plan.mergedAt ?? null, noticedAt: plan.noticedAt ?? null, mergedOutside: plan.mergedOutside ?? null, limitSettings: plan.limits,
+    pauseReason: pauseReason(state),
     rules: (plan.rules ?? []).map(r => [r.path, ...(r.also ?? [])].join(' = ')),
     tasks: state.tasks.map(t => ({ id: t.id, title: t.title, status: t.status, attempts: t.attempts, commit: t.commit ?? null, reason: t.reason ?? null,
       skipped: t.skipped === true, difficulty: t.difficulty ?? null, difficultyReason: plan.tasks?.find(p => p.id === t.id)?.difficultyReason ?? null, effort: t.effort ?? null })),
@@ -327,9 +392,9 @@ export function editDraft(id, changes) {
   const edited = { ...draft.plan, ...(changes.brief !== undefined ? { brief: changes.brief } : {}),
     ...(changes.checks ? { checks: changes.checks.map(c => String(c).trim()).filter(Boolean) } : {}),
     ...(changes.allowedPaths ? { allowedPaths: changes.allowedPaths.map(p => String(p).trim()) } : {}), tasks };
-  const valid = validatePlan(edited, edited.repo, `draft ${id}`);
-  // validatePlan recomputes the dispatch limit from the task count; keep the owner's other limits.
-  const plan = { ...valid, limits: { ...valid.limits, dispatches: 3 * valid.tasks.length + 2 } };
+  if (changes.limits) edited.limits = { ...draft.plan.limits, ...changes.limits };
+  else if (changes.tasks) edited.limits = { ...draft.plan.limits, dispatches: undefined }; // recomputed for the new task count
+  const plan = validatePlan(edited, edited.repo, `draft ${id}`);
   saveDraft(id, { ...draft, plan, editedAt: new Date().toISOString() });
   return plan;
 }

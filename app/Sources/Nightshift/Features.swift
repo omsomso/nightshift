@@ -572,3 +572,112 @@ struct QueueBar: View {
         }
     }
 }
+
+// MARK: Limits
+
+struct LimitsCard: View {
+    let plan: Plan
+    @State private var editing = false
+
+    var body: some View {
+        Card(title: "Limits", symbol: "gauge.with.dots.needle.33percent", trailing: {
+            Button("Change…") { editing = true }.help("Change the time and token allowances. A running plan applies them within a second.")
+        }) {
+            VStack(alignment: .leading, spacing: 8) {
+                if let limits = plan.limits, plan.status != "draft" { LimitsView(limits: limits) }
+                if let s = plan.limitSettings {
+                    Text(Self.summary(s)).font(.caption).foregroundStyle(.secondary)
+                }
+            }
+        }
+        .sheet(isPresented: $editing) { LimitsEditor(plan: plan) }
+        // Development aid: NIGHTSHIFT_OPEN_SHEET=limits opens the editor for the selected plan.
+        .onAppear { if ProcessInfo.processInfo.environment["NIGHTSHIFT_OPEN_SHEET"] == "limits" { editing = true } }
+    }
+
+    static func summary(_ s: LimitSettings) -> String {
+        [s.turnMinutes.map { "\(Self.minutes($0)) per agent turn" }, s.attemptsPerTask.map { "\($0) attempts per task" },
+         s.changedLinesPerTask.map { "\($0.formatted()) changed lines per task" }, s.checkMinutes.map { "\(Self.minutes($0)) per check" }]
+            .compactMap { $0 }.joined(separator: " · ")
+    }
+
+    static func minutes(_ m: Double) -> String { m >= 60 && m.truncatingRemainder(dividingBy: 60) == 0 ? "\(Int(m / 60)) h" : "\(Int(m)) min" }
+}
+
+struct LimitsEditor: View {
+    @Environment(AppModel.self) private var app
+    @Environment(\.dismiss) private var dismiss
+    let plan: Plan
+    @State private var values: [String: Double] = [:]
+    @State private var original: [String: Double] = [:]
+    @State private var saving = false
+
+    // name, label, unit, range, step; tokens are shown in millions.
+    private let rows: [(String, String, String, ClosedRange<Double>, Double)] = [
+        ("turnMinutes", "Time per agent turn", "min", 5...720, 5),
+        ("hours", "Time for the whole plan", "h", 1...168, 1),
+        ("tokens", "New tokens for the whole plan", "M", 1...500, 1),
+        ("attemptsPerTask", "Attempts per task", "", 1...10, 1),
+        ("dispatches", "Attempts for the whole plan", "", 1...200, 1),
+        ("changedLinesPerTask", "Changed lines per task", "lines", 100...50_000, 100),
+        ("checkMinutes", "Time per check", "min", 1...480, 1),
+        ("fixupRounds", "Fix-up rounds at the end", "", 0...5, 1),
+    ]
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Form {
+                Section {
+                    ForEach(rows, id: \.0) { row in
+                        HStack {
+                            Text(row.1)
+                            Spacer()
+                            TextField("", value: binding(row.0), format: .number)
+                                .multilineTextAlignment(.trailing).frame(width: 80).textFieldStyle(.roundedBorder)
+                            Text(row.2).foregroundStyle(.secondary).frame(width: 34, alignment: .leading)
+                            Stepper("", value: binding(row.0), in: row.3, step: row.4).labelsHidden()
+                        }
+                    }
+                } footer: {
+                    Text(plan.status == "draft" ? "The plan starts with these." : "Applied at once; a running plan picks them up within a second, including the time for the turn in progress. Limits catch runaways; they should be generous.")
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .formStyle(.grouped)
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("Save") { Task { await save() } }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
+                    .disabled(saving || values == original)
+            }
+            .padding(12)
+        }
+        .frame(width: 520, height: 470)
+        .navigationTitle("Limits for \(plan.id)")
+        .onAppear(perform: load)
+    }
+
+    private func binding(_ key: String) -> Binding<Double> {
+        Binding(get: { values[key] ?? 0 }, set: { values[key] = $0 })
+    }
+
+    private func load() {
+        guard let s = plan.limitSettings else { return }
+        let all: [String: Double?] = ["turnMinutes": s.turnMinutes, "hours": s.hours, "tokens": s.tokens.map { $0 / 1_000_000 },
+            "attemptsPerTask": s.attemptsPerTask.map(Double.init), "dispatches": s.dispatches.map(Double.init),
+            "changedLinesPerTask": s.changedLinesPerTask.map(Double.init), "checkMinutes": s.checkMinutes, "fixupRounds": s.fixupRounds.map(Double.init)]
+        values = all.compactMapValues { $0 }
+        original = values
+    }
+
+    private func save() async {
+        saving = true
+        defer { saving = false }
+        for (key, value) in values where original[key] != value {
+            let raw = key == "tokens" ? value * 1_000_000 : value
+            await app.perform(["limit", key, String(Int(raw.rounded())), "--plan", plan.id], for: plan.id)
+            if app.errorMessage != nil { return }
+        }
+        dismiss()
+    }
+}

@@ -5,7 +5,7 @@ import { Store } from './store.js';
 import { Supervisor } from './supervisor.js';
 import { simulatedAdapter, simulatedReviewer } from './adapters/simulated.js';
 import { buildAgents, checkProject } from './providers.js';
-import { renderReport } from './report.js';
+import { renderReport, renderDraft } from './report.js';
 import { loadPlan, defaultLimits } from './plan.js';
 import { Workspace } from './workspace.js';
 import { execFileSync } from 'node:child_process';
@@ -23,7 +23,7 @@ import { listProjects, workspaceRoots } from './projects.js';
 import { spawnSync } from 'node:child_process';
 import { setTaskDifficulty } from './plans.js';
 import { validateEffort, levels } from './effort.js';
-import { createPlan, saveDraft, startPlan, stopRunner, mergePlan, discardPlan, summarize, listPlans, resumeRunners, editDraft, fixPrompt } from './plans.js';
+import { createPlan, saveDraft, startPlan, stopRunner, mergePlan, discardPlan, summarize, listPlans, resumeRunners, editDraft, fixPrompt, syncMerges } from './plans.js';
 import { readQueue, enqueuePlan, dequeuePlan, moveInQueue, advanceQueue, isActive } from './queue.js';
 import { autostartStatus, setAutostart } from './autostart.js';
 import { reviewData, activity, usage as usageReport } from './insight.js';
@@ -57,6 +57,7 @@ const usage = `Usage: node src/cli.js <command> [options]
   queue [add|remove|up|down <id> | start | clear]
                                Plans that run one after another; the next starts when one stops for you
   autostart [on|off]           Start runners again after a restart (a login item); resume-runners does it now
+  sync                         Notice plans merged outside Nightshift (fetches origin; asks GitHub about pull requests)
   settings [set <key> <value>] Run settings: onUsageLimit wait|stop, sandboxChecks, checkNetwork, mergeStyle local|pr
 
   demo [state]                 Seed and run the simulated demo
@@ -90,7 +91,7 @@ const { values, positionals } = parseArgs({ allowPositionals: true, options: {
   id: { type: 'string' }, title: { type: 'string' }, acceptance: { type: 'string' }, after: { type: 'string' },
   'max-attempts': { type: 'string', default: '2' }, since: { type: 'string' }, help: { type: 'boolean' },
   plan: { type: 'string' }, 'no-fetch': { type: 'boolean' }, message: { type: 'string' }, session: { type: 'string' }, notes: { type: 'boolean' }, cwd: { type: 'string' }, 'with-rules': { type: 'boolean' }, steps: { type: 'string' }, request: { type: 'string' }, yes: { type: 'boolean' }, json: { type: 'boolean' },
-  lines: { type: 'string', default: '40' }, base: { type: 'string' }, pr: { type: 'boolean' }, local: { type: 'boolean' }, file: { type: 'string' }, task: { type: 'string' }, check: { type: 'string', multiple: true }, 'no-run': { type: 'boolean' }
+  lines: { type: 'string', default: '40' }, base: { type: 'string' }, reason: { type: 'string' }, pr: { type: 'boolean' }, local: { type: 'boolean' }, file: { type: 'string' }, task: { type: 'string' }, check: { type: 'string', multiple: true }, 'no-run': { type: 'boolean' }
 } });
 const [command = 'status', argument] = positionals;
 // demo and status also accept the state directory positionally, as in earlier versions.
@@ -305,7 +306,9 @@ async function start(id = argument) {
     `Follow it with: node src/cli.js report --plan ${id}   (log: ${started.dir}/serve.log)`);
 }
 
-function list() {
+// Also notices plans merged outside Nightshift (local refs only; `sync` asks GitHub too).
+async function list() {
+  await syncMerges({ network: false });
   const plans = listPlans();
   if (values.json) return console.log(JSON.stringify({ home: home(), plans, queue: readQueue(), autostart: autostartStatus().enabled, settings: runSettings() }));
   if (!plans.length) return console.log('No plans yet. Draft one with: node src/cli.js run docs/PLAN.md');
@@ -331,9 +334,10 @@ function logs() {
 
 function discard() {
   if (!argument) throw new Error('discard requires a plan id (see `list`).');
-  const { removed, removes } = discardPlan(argument, { confirm: values.yes });
+  const { removed, removes, problems } = discardPlan(argument, { confirm: values.yes });
   if (!removed) throw new Error(`discard ${argument} would remove:\n${removes.map(r => `  ${r}`).join('\n')}\nRun again with --yes to remove them.`);
-  console.log(`Discarded plan ${argument}:\n${removes.map(r => `  removed ${r}`).join('\n')}`);
+  console.log(`Discarded plan ${argument}:\n${removes.map(r => r.startsWith('(') ? `  ${r}` : `  removed ${r}`).join('\n')}`);
+  if (problems?.length) console.log(`Some steps did not complete (the plan record is gone either way):\n${problems.map(p => `  ${p}`).join('\n')}`);
 }
 
 // Turning a provider off is local configuration only: nothing is uninstalled or signed out.
@@ -513,6 +517,12 @@ function workspaces() {
 
 const commands = {
   demo, serve, add, plan, setup, draft, run, list, providers, login, chat, projects, workspaces, effort, branches, check, settings, queue, autostart,
+  // Notices plans merged outside Nightshift: fetches origin and asks GitHub about open pull requests.
+  sync: async () => {
+    const marked = await syncMerges({ network: !values['no-fetch'] });
+    if (values.json) return console.log(JSON.stringify({ merged: marked }));
+    console.log(marked.length ? marked.map(m => `${m.id}: merged (${m.how})`).join('\n') : 'No plan was merged outside Nightshift.');
+  },
   'resume-runners': async () => { const started = await resumeRunners(); console.log(started.length ? `Started: ${started.join(', ')}` : 'Nothing to start.'); },
   difficulty: () => {
     if (!values.plan || !argument || !positionals[2]) throw new Error('Use: difficulty <task-id> <low|medium|high> --plan <id>');
@@ -533,14 +543,16 @@ const commands = {
   },
   status: () => console.log(JSON.stringify(Store.inspect(directory), null, 2)),
   report: () => {
+    const draft = values.plan && !Store.inspect(directory).plan ? readDraft(directory) : null;
+    if (!values.json && draft) return process.stdout.write(renderDraft(values.plan, draft));
     if (!values.json) return process.stdout.write(renderReport(Store.inspect(directory), { since: values.since }));
     if (!values.plan) throw new Error('report --json requires --plan <id>.');
     const summary = summarize(values.plan);
     if (!summary) throw new Error(`No plan or draft named ${values.plan}.`);
     console.log(JSON.stringify(summary));
   },
-  pause: () => enqueue('pause'),
-  resume: () => enqueue('resume'),
+  pause: () => enqueue('pause', { reason: values.reason ?? 'Paused with `nightshift pause`' }),
+  resume: () => enqueue('resume', { reason: values.reason ?? 'Resumed with `nightshift resume`' }),
   interrupt: () => enqueue('interrupt'),
   retry: () => { if (!argument) throw new Error('retry requires a task ID.'); enqueue('retry', { id: argument }); },
   skip: () => { if (!argument) throw new Error('skip requires a task ID.'); enqueue('skip', { id: argument }); },
@@ -585,11 +597,25 @@ const commands = {
     if (values.json) return console.log(JSON.stringify(fix));
     console.log(`cd ${fix.cwd}\n\n${fix.prompt}`);
   },
+  // A running plan applies a limit within a second, including the time per turn of the turn in
+  // progress; a plan without a runner takes it at once; a draft keeps it for when it starts.
   limit: () => {
     const value = positionals[2];
     if (!argument || !value) throw new Error('limit requires a name and a value, for example: limit tokens 8000000');
     if (!(argument in defaultLimits)) throw new Error(`Unknown limit ${argument}. Valid limits: ${Object.keys(defaultLimits).join(', ')}.`);
-    enqueue('limit', { name: argument, value: Number(value) });
+    if (values.plan && !Store.inspect(directory).plan && readDraft(directory)) {
+      editDraft(values.plan, { limits: { [argument]: Number(value) } });
+      return console.log(`Draft ${values.plan}: ${argument} = ${value}.`);
+    }
+    if (!Store.inspect(directory).runner?.alive) {
+      const store = new Store(directory);
+      store.acquire();
+      try { new Supervisor(store, null, null).setLimit(argument, Number(value)); }
+      finally { store.release(); }
+      return console.log(`Set ${argument} = ${value}.`);
+    }
+    Store.enqueue(directory, 'limit', { name: argument, value: Number(value) });
+    console.log(`Queued: ${argument} = ${value}. The running plan applies it within a second, including to the turn in progress.`);
   }
 };
 

@@ -65,6 +65,7 @@ export function activity(id, { limit = 40 } = {}) {
       case 'review-failed': kind = 'fail'; text = `Review asked for changes: ${String(d).slice(0, 200)}`; break;
       case 'committed': kind = 'commit'; text = `Committed ${String(d).slice(0, 8)}`; break;
       case 'blocked': case 'plan-blocked': kind = 'fail'; text = `Stopped: ${String(d).replace(/\s+/g, ' ').slice(0, 200)}`; break;
+      case 'turn-timeout': case 'merge-detected': case 'limit-changed':
       case 'usage-limit': case 'usage-limit-resumed': case 'plan-limit': case 'paused': case 'resumed': case 'plan-ready':
       case 'queue-advanced': case 'pull-request-opened': case 'owner-fix-submitted': case 'skipped':
         kind = 'note'; text = String(typeof d === 'string' ? d : event.type).slice(0, 220); break;

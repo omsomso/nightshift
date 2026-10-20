@@ -34,6 +34,11 @@ struct Plan: Decodable, Identifiable, Hashable {
     let waitUntil: String?
     let queued: Int?
     let pullRequest: String?
+    let mergedAt: String?
+    let noticedAt: String?
+    let mergedOutside: String?
+    let limitSettings: LimitSettings?
+    let pauseReason: PauseReason?
     let tasks: [PlanTask]
     let limits: Limits?
     let lastEvent: LastEvent?
@@ -47,6 +52,7 @@ struct Plan: Decodable, Identifiable, Hashable {
     var isWaitingForLimit: Bool { waitUntil != nil && isPaused }
     var waitUntilDate: Date? { waitUntil.flatMap { ISO8601DateFormatter.withFractions.date(from: $0) ?? ISO8601DateFormatter().date(from: $0) } }
     var hasCommits: Bool { tasks.contains { $0.commit != nil } }
+    var isArchived: Bool { status == "merged" }
     var doneCount: Int { tasks.filter { $0.status == "done" }.count }
     var blockedTask: PlanTask? { tasks.first { $0.status == "blocked" } }
 
@@ -214,6 +220,7 @@ final class AppModel {
     var lastRefresh: Date?
     private var previousHeadlines: [String: Bool] = [:]
     private var polling: Task<Void, Never>?
+    private var syncing: Task<Void, Never>?
 
     init() {
         // Notifications need an app bundle; `swift run` has none.
@@ -224,6 +231,15 @@ final class AppModel {
             while !Task.isCancelled {
                 await self?.refresh()
                 try? await Task.sleep(for: .seconds(3))
+            }
+        }
+        // Plans merged on GitHub or by hand move to the archive (`nightshift sync` fetches and asks gh).
+        syncing = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(5))
+            while !Task.isCancelled {
+                _ = try? await CLI.load().run(["sync", "--json"])
+                await self?.refresh()
+                try? await Task.sleep(for: .seconds(120))
             }
         }
     }
@@ -523,4 +539,22 @@ struct UsageReport: Decodable, Hashable {
     let days: [Day]
     let plans: [PlanUsage]
     let total: Total
+}
+
+// A plan's limits (src/plan.js defaultLimits), as stored in the plan or draft.
+struct LimitSettings: Decodable, Hashable {
+    let attemptsPerTask: Int?
+    let turnMinutes: Double?
+    let dispatches: Int?
+    let tokens: Double?
+    let hours: Double?
+    let changedLinesPerTask: Int?
+    let checkMinutes: Double?
+    let fixupRounds: Int?
+}
+
+struct PauseReason: Decodable, Hashable {
+    let at: String
+    let type: String
+    let text: String
 }

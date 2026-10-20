@@ -86,3 +86,9 @@ screenshotted against fixture plans (ready, blocked, waiting at a usage limit, p
 open, queued draft). Not clicked through on screen: Fix with Claude (it opens Terminal and a
 real Claude session), the merge/pull-request confirmations, and saving an edited draft from
 the sheet (the `edit` command behind it is tested).
+2026-10-20: merged plans move to a collapsible Archive in the sidebar (the app runs
+`nightshift sync` at launch and every two minutes, so merges on GitHub or by hand are noticed);
+pull requests use GitHub's colours (open green, merged purple); the Limits card has
+Change… (all limits, applied at once, also to the turn in progress); a paused plan says
+who paused it and why; long panel texts fold with Show more. Screenshotted against the
+owner's real plans (archive, merged panel, limits editor).

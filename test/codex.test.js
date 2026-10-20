@@ -59,7 +59,7 @@ for (const [mode, pattern] of [
 
 for (const mode of ['stall', 'start-stall']) {
   test(`whole-turn deadline bounds ${mode}`, async () => {
-    await assert.rejects(() => new CodexAdapter(options(mode, { timeoutMs: 150 })).execute(sampleTask), /timed out/);
+    await assert.rejects(() => new CodexAdapter(options(mode, { timeoutMs: 150 })).execute(sampleTask), /ran past/);
   });
 }
 
