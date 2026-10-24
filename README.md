@@ -54,7 +54,8 @@ node src/cli.js run /path/to/repo/docs/PLAN.md --steps "1-10"
 
 `setup` also installs a `nightshift` command (in `~/.local/bin`) and a Nightshift skill for
 Claude Code and Codex, so any session in any project knows how to hand work to
-Nightshift when you ask it to.
+Nightshift when you ask it to. It leaves them alone when run from a separate
+`NIGHTSHIFT_HOME` (a test or demo) or from a copy of Nightshift in a temporary folder.
 
 `run` has an agent turn the document's steps into a plan (one task per step, with
 acceptance criteria, checks, and allowed paths), shows it, and asks once. If you say
