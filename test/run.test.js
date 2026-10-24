@@ -514,3 +514,16 @@ test('a pause says why; a draft report shows the draft', t => {
     if (plan.pauseReason) assert.equal(plan.pauseReason.text, 'Paused to raise the limits');
   });
 });
+
+test('setup from a test home or a temporary copy never takes over the installed command and skill', t => {
+  const e = setupEnv(t);
+  // A fake user home, so the real one is never touched; no NIGHTSHIFT_INSTALL_ROOT.
+  const userHome = join(e.root, 'user');
+  mkdirSync(join(userHome, '.claude'), { recursive: true });
+  const env = { ...e.env, HOME: userHome };
+  delete env.NIGHTSHIFT_INSTALL_ROOT;
+  const out = execFileSync(process.execPath, [cliFile, 'setup'], { cwd: e.repo, env, encoding: 'utf8', timeout: 30_000 });
+  assert.match(out, /skipped \(NIGHTSHIFT_HOME points to a separate home/);
+  assert.equal(existsSync(join(userHome, '.local', 'bin', 'nightshift')), false);
+  assert.equal(existsSync(join(userHome, '.claude', 'skills', 'nightshift', 'SKILL.md')), false);
+});
