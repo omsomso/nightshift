@@ -27,10 +27,12 @@ import { createPlan, saveDraft, startPlan, stopRunner, mergePlan, discardPlan, s
 import { readQueue, enqueuePlan, dequeuePlan, moveInQueue, advanceQueue, isActive } from './queue.js';
 import { autostartStatus, setAutostart } from './autostart.js';
 import { reviewData, activity, usage as usageReport } from './insight.js';
+import { doctor } from './doctor.js';
 
 const usage = `Usage: node src/cli.js <command> [options]
 
   setup                        Record the installed Claude/Codex versions and check sign-ins
+  doctor                       Check what this Mac has and what is missing for Nightshift (changes nothing)
   run <doc> [--steps s]        Draft a plan from a document, ask once, then run it in the background
         [--repo path] [--agents spec] [--request text] [--base ref] [--yes]
                                --base: start from this branch or commit (default: the fetched main branch)
@@ -58,7 +60,8 @@ const usage = `Usage: node src/cli.js <command> [options]
                                Plans that run one after another; the next starts when one stops for you
   autostart [on|off]           Start runners again after a restart (a login item); resume-runners does it now
   sync                         Notice plans merged outside Nightshift (fetches origin; asks GitHub about pull requests)
-  settings [set <key> <value>] Run settings: onUsageLimit wait|stop, sandboxChecks, checkNetwork, mergeStyle local|pr
+  settings [set <key> <value>] Run settings: onUsageLimit wait|stop, sandboxChecks, checkNetwork, mergeStyle local|pr,
+                               claudeModel / codexModel <model|default>
 
   demo [state]                 Seed and run the simulated demo
   status [state]               Print saved state (works while a runner is active)
@@ -451,20 +454,28 @@ async function check() {
 }
 
 // Run settings shared by the CLI and the app (stored in ~/.nightshift/config.json).
+// Model settings take a model name (as the provider's CLI accepts it) or "default" for the account's default.
+const modelName = /^[A-Za-z0-9][A-Za-z0-9._:\[\]-]{0,80}$/;
 const settingKeys = {
-  onUsageLimit: ['wait', 'stop'], sandboxChecks: ['true', 'false'], checkNetwork: ['true', 'false'], mergeStyle: ['local', 'pr']
+  onUsageLimit: ['wait', 'stop'], sandboxChecks: ['true', 'false'], checkNetwork: ['true', 'false'], mergeStyle: ['local', 'pr'],
+  claudeModel: modelName, codexModel: modelName
 };
 function runSettings(config = readConfig()) {
   return { onUsageLimit: config.onUsageLimit ?? 'wait', sandboxChecks: config.sandboxChecks !== false, checkNetwork: config.checkNetwork === true,
-    mergeStyle: config.mergeStyle ?? 'local', autostart: autostartStatus().enabled };
+    mergeStyle: config.mergeStyle ?? 'local', autostart: autostartStatus().enabled,
+    claudeModel: config.claudeModel ?? null, codexModel: config.codexModel ?? null };
 }
 function settings() {
   const [, action, key, value] = positionals;
   if (action === 'set') {
     if (!settingKeys[key]) throw new Error(`Unknown setting ${key}. Settings: ${Object.keys(settingKeys).join(', ')}.`);
-    if (!settingKeys[key].includes(value)) throw new Error(`${key} must be one of: ${settingKeys[key].join(', ')}.`);
+    const allowed = settingKeys[key];
+    if (Array.isArray(allowed) ? !allowed.includes(value) : !allowed.test(value ?? '')) {
+      throw new Error(Array.isArray(allowed) ? `${key} must be one of: ${allowed.join(', ')}.` : `${key} must be a model name, such as claude-opus-5-5, or "default".`);
+    }
     const config = readConfig();
-    config[key] = value === 'true' ? true : value === 'false' ? false : value;
+    if (!Array.isArray(allowed) && value === 'default') delete config[key];
+    else config[key] = value === 'true' ? true : value === 'false' ? false : value;
     writeConfig(config);
   } else if (action) throw new Error('Use: settings [set <key> <value>]');
   const current = runSettings();
@@ -518,6 +529,14 @@ function workspaces() {
 const commands = {
   demo, serve, add, plan, setup, draft, run, list, providers, login, chat, projects, workspaces, effort, branches, check, settings, queue, autostart,
   // Notices plans merged outside Nightshift: fetches origin and asks GitHub about open pull requests.
+  doctor: () => {
+    const report = doctor();
+    if (values.json) return console.log(JSON.stringify(report));
+    const mark = { ok: '✓', warn: '!', fail: '✗', info: '·' };
+    for (const c of report.checks) console.log(`${mark[c.level]} ${c.name.padEnd(22)} ${c.detail}${c.fix ? `\n  ${''.padEnd(22)} → ${c.fix}` : ''}`);
+    console.log(report.ok ? '\nReady to use.' : '\nFix the items marked ✗ first.');
+    if (!report.ok) process.exitCode = 1;
+  },
   sync: async () => {
     const marked = await syncMerges({ network: !values['no-fetch'] });
     if (values.json) return console.log(JSON.stringify({ merged: marked }));

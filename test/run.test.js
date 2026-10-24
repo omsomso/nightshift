@@ -365,12 +365,26 @@ test('autostart installs a login item; resume-runners restarts runners that were
   assert.equal(existsSync(join(e.env.NIGHTSHIFT_LAUNCH_AGENTS, 'com.nightshift.runners.plist')), false);
 });
 
-test('run settings are validated and stored', t => {
+test('run settings are validated and stored', async t => {
   const e = setupEnv(t);
+  e.cli('setup');
   e.cli('settings', 'set', 'onUsageLimit', 'stop');
   e.cli('settings', 'set', 'mergeStyle', 'pr');
   e.cli('settings', 'set', 'sandboxChecks', 'false');
-  assert.deepEqual(JSON.parse(e.cli('settings', '--json')), { onUsageLimit: 'stop', sandboxChecks: false, checkNetwork: false, mergeStyle: 'pr', autostart: false });
+  assert.deepEqual(JSON.parse(e.cli('settings', '--json')), { onUsageLimit: 'stop', sandboxChecks: false, checkNetwork: false, mergeStyle: 'pr', autostart: false, claudeModel: null, codexModel: null });
+  // A model for Claude's agents, used by every runner and planner started afterwards; "default" clears it.
+  e.cli('settings', 'set', 'claudeModel', 'claude-sonnet-5-5');
+  assert.equal(JSON.parse(e.cli('settings', '--json')).claudeModel, 'claude-sonnet-5-5');
+  const id = JSON.parse(e.cli('draft', 'docs/PLAN.md', '--json')).id;
+  e.cli('start', id);
+  return until(() => e.json().plans.find(p => p.id === id)?.models, 20_000).then(() => {
+    // The stand-in reports the model it was started with (--model).
+    assert.equal(e.json().plans.find(p => p.id === id).models.worker, 'claude-sonnet-5-5');
+    e.cli('settings', 'set', 'claudeModel', 'default');
+    assert.equal(JSON.parse(e.cli('settings', '--json')).claudeModel, null);
+    const bad = spawnSync(process.execPath, [cliFile, 'settings', 'set', 'claudeModel', 'bad model; rm'], { env: e.env, encoding: 'utf8' });
+    assert.match(bad.stderr, /must be a model name/);
+  });
   const bad = spawnSync(process.execPath, [cliFile, 'settings', 'set', 'mergeStyle', 'push'], { env: e.env, encoding: 'utf8' });
   assert.equal(bad.status, 1);
   assert.match(bad.stderr, /must be one of: local, pr/);

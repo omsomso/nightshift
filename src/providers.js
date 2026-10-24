@@ -10,16 +10,21 @@ import { readConfig } from './home.js';
 import { ClaudeSession } from './claude/session.js';
 import { CodexSession } from './codex/session.js';
 
+// The model each provider's agents use: NIGHTSHIFT_<PROVIDER>_MODEL, else the `claudeModel` /
+// `codexModel` setting, else nothing, which means the account's default in that CLI. A
+// runner reads it when it starts, so a change applies to plans started (or restarted) after it.
+export const chosenModel = name => process.env[`NIGHTSHIFT_${name.toUpperCase()}_MODEL`] || readConfig()[`${name}Model`] || undefined;
+
 const providers = {
   codex: {
     env: 'CODEX', command: 'codex',
-    options: (cwd, command, extra) => ({ cwd, model: process.env.NIGHTSHIFT_CODEX_MODEL || undefined,
+    options: (cwd, command, extra) => ({ cwd, model: chosenModel('codex'),
       createClient: () => createAppServer({ command, cwd }), ...extra }),
     worker: options => new CodexAdapter(options), reviewer: options => new CodexReviewer(options)
   },
   claude: {
     env: 'CLAUDE', command: 'claude',
-    options: (cwd, command, extra) => ({ cwd, command, model: process.env.NIGHTSHIFT_CLAUDE_MODEL || undefined,
+    options: (cwd, command, extra) => ({ cwd, command, model: chosenModel('claude'),
       maxBudgetUsd: process.env.NIGHTSHIFT_CLAUDE_MAX_BUDGET_USD || (extra.edit ? '10' : '2'), ...extra }),
     worker: options => new ClaudeAdapter(options), reviewer: options => new ClaudeReviewer(options)
   }

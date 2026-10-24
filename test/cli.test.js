@@ -217,3 +217,13 @@ test('the README command overview and --help describe the new commands', () => {
   const help = spawnSync(process.execPath, [cliFile, '--help'], { encoding: 'utf8' }).stderr;
   for (const pattern of [/logs <id>/, /discard <id> --yes/, /--base ref/, /report --plan <id> --json/]) assert.match(help, pattern);
 });
+
+test('doctor reports what the Mac has, with fixes, and changes nothing', t => {
+  const e = setupEnv(t);
+  const result = JSON.parse(e.cli('doctor', '--json'));
+  const names = result.checks.map(c => c.name);
+  for (const name of ['Node.js', 'Git', 'Setup', 'Workspaces', 'Check sandbox']) assert.ok(names.includes(name), name);
+  const setup = result.checks.find(c => c.name === 'Setup');
+  assert.deepEqual([setup.level, setup.fix], ['fail', 'From the Nightshift folder: node src/cli.js setup']);
+  assert.equal(result.ok, false, 'not set up yet in this fresh home');
+});

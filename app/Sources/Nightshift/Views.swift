@@ -504,6 +504,9 @@ struct PlanDetail: View {
                 }
                 if let branch = plan.branch { row("Plan branch", branch) }
                 if let agents = plan.agents { row("Agents", Self.agentsText(agents)) }
+                if let models = plan.models, !models.isEmpty {
+                    row("Models", Set(models.values).count == 1 ? models.values.first! : models.sorted { $0.key > $1.key }.map { "\($0.key) \($0.value)" }.joined(separator: ", "))
+                }
                 if plan.status != "draft" { row("Runner", plan.runner ? "running in the background" : "stopped") }
                 if let rules = plan.rules { row("Project rules", rules.isEmpty ? "none found" : rules.joined(separator: ", ")) }
             }
@@ -554,11 +557,10 @@ struct PlanDetail: View {
                     if active { Text(task.status == "review" ? "In review" : "Working").font(.caption2.weight(.semibold)).padding(.horizontal, 6).padding(.vertical, 1).background(Capsule().fill(Color.accentColor.opacity(0.18))) }
                 }
                 if let acceptance = task.acceptance { Text("Done when: \(acceptance)").font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
-                DifficultyRow(plan: plan, task: task)
                 if task.status == "blocked", let reason = task.reason {
                     Text(reason).font(.caption).foregroundStyle(.red).lineLimit(6).textSelection(.enabled)
                 }
-                if let attempts = task.attempts, attempts > 1 { Text("\(attempts) attempts").font(.caption).foregroundStyle(.secondary) }
+                TaskBadges(plan: plan, task: task).padding(.top, 2)
             }
             Spacer()
             if let commit = task.commit { Text(String(commit.prefix(8))).font(.caption.monospaced()).foregroundStyle(.secondary).textSelection(.enabled) }
@@ -807,33 +809,82 @@ enum Snapshot {
     }
 }
 
-// The planner's difficulty rating (editable on drafts and before a task runs), and the
-// effort the task last ran at.
-struct DifficultyRow: View {
+// A task's facts as one row of small badges: difficulty (a menu while it can still change;
+// the planner's reason on hover), the effort it ran at, attempts, and how it ended.
+struct TaskBadges: View {
     @Environment(AppModel.self) private var model
     let plan: Plan
     let task: PlanTask
 
+    @State private var choosing = false
+    private var editable: Bool { plan.status == "draft" || (task.status == "ready" && (task.attempts ?? 0) == 0) }
+
     var body: some View {
-        HStack(spacing: 8) {
-            if plan.status == "draft" || task.status == "ready" {
-                Picker("Difficulty", selection: Binding(get: { task.difficulty ?? "medium" }, set: { level in
-                    Task { await model.perform(["difficulty", task.id, level, "--plan", plan.id], for: plan.id) }
-                })) {
-                    Text("Low").tag("low"); Text("Medium").tag("medium"); Text("High").tag("high")
-                }
-                .pickerStyle(.segmented)
-                .fixedSize()
-                .controlSize(.small)
-                .help("Sets how much reasoning effort the worker starts with. Each retry goes one level higher.")
-            } else if task.skipped == true {
-                Text("Skipped by you").font(.caption).foregroundStyle(.secondary)
-            } else if let difficulty = task.difficulty {
-                Text("Rated \(difficulty)").font(.caption).foregroundStyle(.secondary)
+        HStack(spacing: 6) {
+            if task.skipped == true {
+                Badge(text: "Skipped by you", symbol: "forward", tint: .secondary)
+            } else if task.ownerFixed == true {
+                Badge(text: "Fixed by you", symbol: "person.fill.checkmark", tint: .green)
             }
-            if let reason = task.difficultyReason { Text(reason).font(.caption).foregroundStyle(.secondary).lineLimit(2) }
-            if let effort = task.effort, task.status != "draft" { Text("· ran at \(effort) effort").font(.caption).foregroundStyle(.secondary) }
+            if let difficulty = task.difficulty ?? (editable ? "medium" : nil) {
+                if editable {
+                    Button { choosing = true } label: {
+                        Badge(text: difficulty.capitalized, symbol: Self.symbol(difficulty), tint: Self.tint(difficulty), chevron: true)
+                    }
+                    .buttonStyle(.plain)
+                    .help((task.difficultyReason.map { "\($0)\n\n" } ?? "") + "Difficulty sets the effort the worker starts with; each retry goes one level higher. Click to change.")
+                    .popover(isPresented: $choosing, arrowEdge: .bottom) {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Difficulty").font(.headline)
+                            if let reason = task.difficultyReason { Text(reason).font(.caption).foregroundStyle(.secondary).frame(maxWidth: 260, alignment: .leading) }
+                            HStack(spacing: 6) {
+                                ForEach(["low", "medium", "high"], id: \.self) { level in
+                                    Button { choosing = false; Task { await model.perform(["difficulty", task.id, level, "--plan", plan.id], for: plan.id) } } label: {
+                                        Badge(text: level.capitalized, symbol: Self.symbol(level), tint: Self.tint(level))
+                                            .overlay(Capsule().stroke(level == difficulty ? Self.tint(level) : .clear))
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
+                            Text("Sets the effort the worker starts with; each retry goes one level higher.").font(.caption2).foregroundStyle(.tertiary).frame(maxWidth: 260, alignment: .leading)
+                        }
+                        .padding(12)
+                    }
+                } else {
+                    Badge(text: difficulty.capitalized, symbol: Self.symbol(difficulty), tint: Self.tint(difficulty))
+                        .help(task.difficultyReason ?? "The planner's difficulty rating.")
+                }
+            }
+            if let effort = task.effort, task.status != "draft" {
+                Badge(text: "Effort \(effort)", symbol: "brain", tint: .secondary)
+                    .help(task.status == "done" ? "The last attempt ran at \(effort) effort." : "Runs at \(effort) effort.")
+            }
+            if let attempts = task.attempts, attempts > 1 {
+                Badge(text: "\(attempts) attempts", symbol: "arrow.clockwise", tint: .secondary)
+            }
         }
+    }
+
+    static func tint(_ level: String) -> Color { level == "high" ? .orange : level == "low" ? .teal : .blue }
+    static func symbol(_ level: String) -> String { level == "high" ? "gauge.with.dots.needle.67percent" : level == "low" ? "gauge.with.dots.needle.0percent" : "gauge.with.dots.needle.33percent" }
+}
+
+struct Badge: View {
+    let text: String
+    var symbol: String? = nil
+    var tint: Color = .secondary
+    var chevron = false
+
+    var body: some View {
+        HStack(spacing: 3) {
+            if let symbol { Image(systemName: symbol).imageScale(.small) }
+            Text(text)
+            if chevron { Image(systemName: "chevron.down").imageScale(.small).opacity(0.7) }
+        }
+        .font(.caption2.weight(.medium))
+        .padding(.horizontal, 7).padding(.vertical, 2.5)
+        .background(Capsule().fill(tint.opacity(0.14)))
+        .foregroundStyle(tint == .secondary ? Color.secondary : tint)
     }
 }
 

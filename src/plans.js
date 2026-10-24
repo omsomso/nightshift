@@ -287,6 +287,13 @@ async function markMerged(id, found) {
   return true;
 }
 
+// The model each role last ran on, as the provider reported it.
+function modelsUsed(state) {
+  const models = {};
+  for (const e of state.events) if (e.type === 'provider:turn-started' && e.detail?.model) models[e.detail.role ?? 'worker'] = e.detail.model;
+  return Object.keys(models).length ? models : null;
+}
+
 // Why a plan is paused, in words: the last event that paused it.
 function pauseReason(state) {
   if (!state.paused) return null;
@@ -325,10 +332,10 @@ export function summarize(id) {
     blocker: plan.reason ?? blocked?.reason ?? null, current: current ? { id: current.id, title: current.title, status: current.status } : null,
     finalReview: plan.final?.review?.reason ?? null, pullRequest: plan.pullRequest ?? null,
     mergedAt: plan.mergedAt ?? null, noticedAt: plan.noticedAt ?? null, mergedOutside: plan.mergedOutside ?? null, limitSettings: plan.limits,
-    pauseReason: pauseReason(state),
+    pauseReason: pauseReason(state), models: modelsUsed(state),
     rules: (plan.rules ?? []).map(r => [r.path, ...(r.also ?? [])].join(' = ')),
     tasks: state.tasks.map(t => ({ id: t.id, title: t.title, status: t.status, attempts: t.attempts, commit: t.commit ?? null, reason: t.reason ?? null,
-      skipped: t.skipped === true, difficulty: t.difficulty ?? null, difficultyReason: plan.tasks?.find(p => p.id === t.id)?.difficultyReason ?? null, effort: t.effort ?? null })),
+      skipped: t.skipped === true, ownerFixed: t.ownerFixed === true, difficulty: t.difficulty ?? null, difficultyReason: plan.tasks?.find(p => p.id === t.id)?.difficultyReason ?? null, effort: t.effort ?? null })),
     effort: plan.effort ?? null,
     limits: { dispatches: [dispatches, plan.limits.dispatches], tokens: [tokens, plan.limits.tokens], hours: [Number(hours.toFixed(2)), plan.limits.hours] },
     lastEvent: last ? { at: last.at, type: last.type } : null,
