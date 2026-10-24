@@ -6,6 +6,7 @@ struct AccountsView: View {
     @State private var status: ProvidersResponse?
     @State private var working: String?
     @State private var effort: EffortSettings?
+    @State private var runSettings: RunSettings?
 
     var body: some View {
         Form {
@@ -35,6 +36,18 @@ struct AccountsView: View {
                     LabeledContent("New plans use", value: AgentChoice.all.first { $0.spec == defaultAgents }?.label ?? defaultAgents)
                 }
             }
+            if let runSettings {
+                Section {
+                    ModelPicker(provider: "claude", current: runSettings.claudeModel,
+                                presets: [("claude-opus-5-5", "Opus 5.5"), ("claude-sonnet-5-5", "Sonnet 5.5"), ("claude-haiku-5-5", "Haiku 5.5")]) { await setModel("claudeModel", $0) }
+                    ModelPicker(provider: "codex", current: runSettings.codexModel, presets: []) { await setModel("codexModel", $0) }
+                } header: {
+                    Text("Models")
+                } footer: {
+                    Text("Account default uses whatever the Claude or Codex CLI picks for your account. A change applies to plans started (or restarted) afterwards; each plan's Overview shows the model its agents ran on.")
+                        .foregroundStyle(.secondary)
+                }
+            }
             if let effort {
                 Section {
                     effortPicker("Workers at least", key: "min", value: effort.min)
@@ -56,7 +69,7 @@ struct AccountsView: View {
         .frame(width: 560)
         .frame(minHeight: 660)
         .disabled(working != nil)
-        .task { status = await app.loadProviders(); effort = await app.loadEffort() }
+        .task { status = await app.loadProviders(); effort = await app.loadEffort(); runSettings = try? await app.decode(RunSettings.self, ["settings", "--json"]) }
     }
 
     private func row(_ provider: ProviderStatus) -> some View {
@@ -96,10 +109,50 @@ struct AccountsView: View {
         }
     }
 
+    private func setModel(_ key: String, _ value: String) async {
+        await app.perform(["settings", "set", key, value.isEmpty ? "default" : value], for: "accounts")
+        runSettings = try? await app.decode(RunSettings.self, ["settings", "--json"])
+    }
+
     private func act(_ key: String, _ arguments: [String]) async {
         working = key
         defer { working = nil }
         await app.perform(arguments, for: "accounts")
         status = await app.loadProviders()
+    }
+}
+
+// The model a provider's agents use: the account's default, a preset, or any name the CLI accepts.
+struct ModelPicker: View {
+    let provider: String
+    let current: String?
+    let presets: [(String, String)]
+    let set: (String) async -> Void
+    @State private var custom = ""
+    @State private var editingCustom = false
+
+    private var selection: String {
+        guard let current else { return "" }
+        return presets.contains { $0.0 == current } ? current : "custom"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Picker(AgentRoles.name(provider), selection: Binding(get: { editingCustom ? "custom" : selection }, set: { value in
+                if value == "custom" { editingCustom = true; custom = current ?? "" }
+                else { editingCustom = false; Task { await set(value) } }
+            })) {
+                Text("Account default").tag("")
+                ForEach(presets, id: \.0) { preset in Text("\(preset.1)  (\(preset.0))").tag(preset.0) }
+                Text(selection == "custom" && !editingCustom ? "Other: \(current ?? "")" : "Other…").tag("custom")
+            }
+            if editingCustom {
+                HStack {
+                    TextField("Model name, e.g. claude-opus-5-5", text: $custom).textFieldStyle(.roundedBorder)
+                    Button("Use") { editingCustom = false; Task { await set(custom.trimmingCharacters(in: .whitespaces)) } }
+                        .disabled(custom.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+            }
+        }
     }
 }

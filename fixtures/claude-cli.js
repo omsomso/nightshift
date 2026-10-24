@@ -37,7 +37,7 @@ process.stdin.on('end', () => {
 
   const ids = { session_id: sessionId };
   send({ type: 'system', subtype: 'init', session_id: mode === 'wrong-session' ? randomUUID() : sessionId, uuid: randomUUID(),
-    model: 'fixture-model', permissionMode: 'dontAsk', apiKeySource: mode === 'api-key' ? 'ANTHROPIC_API_KEY' : 'none', tools: ['Read', 'Grep', 'Glob'],
+    model: value('--model') ?? 'fixture-model', permissionMode: 'dontAsk', apiKeySource: mode === 'api-key' ? 'ANTHROPIC_API_KEY' : 'none', tools: ['Read', 'Grep', 'Glob'],
     resumed: has('--resume') });
   if (mode === 'stall' || mode === 'api-key') return setInterval(() => {}, 1000); // api-key: must be killed, not awaited
   if (!value('--json-schema') && input.includes('take your time')) return setInterval(() => {}, 1000); // a turn that only ends when stopped

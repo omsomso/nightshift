@@ -1,21 +1,45 @@
 # Nightshift
 
-A personal, local-first workspace that keeps coding agents moving while you are away.
+Plan coding work with Claude during the day; Nightshift does it overnight and you decide
+in the morning what goes in. It turns a roadmap into milestone tasks, runs Claude (or
+Codex) agents on them in a private git worktree of your project, fenced in by the
+operating system, runs your project's checks itself, has a separate agent review every
+change, commits what passes, and stops at a branch for you to merge or open a pull
+request. Nothing reaches your real branch, and nothing is pushed, without your approval.
 
-**Status: supervisor core plus initial Codex and Claude adapters.**
-Both adapters share one set of worker/reviewer prompts and are tested against
-subprocess fixtures. Either provider can be the worker or the reviewer. Claude has
-Both have completed live, read-only worker/reviewer runs, including Codex work reviewed by Claude.
-Both are restricted to subscription billing (claude.ai, ChatGPT).
-The web interface is not implemented.
-The default demo is simulated and does not call a model or spend API credits.
+- **Local-first.** A Node.js command (no dependencies to install) and a macOS app over it.
+  State lives in `~/.nightshift`; nothing runs in the cloud except the agents' models.
+- **Subscription-only.** Agents run on your Claude (claude.ai) or ChatGPT sign-in through
+  the official Claude Code and Codex CLIs. API keys are refused by design.
+- **Made for unattended runs.** Generous kill switches, waiting out usage limits, retrying
+  timed-out turns, a queue, restarting after a reboot, and a morning review screen.
 
-## Why
+The user guide is `docs/Nightshift-Guide.pdf`.
 
-The owner runs a Mac Studio 24/7 with a VM and currently uses remotely accessible
-Codex and Claude desktop chats. Nightshift will own programmatic agent sessions,
-give them a persistent project queue, verify results, and expose a remote-friendly
-chat interface. Closing the interface must not stop the supervisor.
+## Use it on your own Mac
+
+1. **Requirements:** macOS 14 or newer, Node.js 22.13+, Git, and the
+   [Claude Code](https://claude.com/claude-code) CLI signed in with a Claude subscription
+   (`claude auth login`). Optional: the Codex CLI with ChatGPT (a second model as reviewer),
+   the GitHub CLI `gh` (approve plans as pull requests), and Xcode or the Command Line
+   Tools (to build the app).
+2. **Get the code** (clone or copy this folder anywhere) and, from it, run:
+
+   ```sh
+   node src/cli.js doctor      # what this Mac has and what is missing (changes nothing)
+   node src/cli.js setup       # records CLI versions, installs the nightshift command and skill
+   app/build.sh && open app/build/Nightshift.app
+   ```
+3. **Tell it where your projects are:** `nightshift workspaces set ~/Projects` (by default,
+   the folder that holds Nightshift). Plan Studio and the skill pick projects from there.
+4. **Plan something:** in the app press **+** and paste notes, or ask any Claude Code session
+   in a project to "use Nightshift". Review the draft, approve it, and look again in the
+   morning.
+
+Nothing in the code is tied to one person's machine: paths come from `setup` and
+`~/.nightshift/config.json`, and Settings (Cmd-comma) covers sign-ins, models, effort,
+sandboxing, approval style, and autostart. `AGENTS.md` holds the rules for agents working
+on Nightshift itself.
 
 ## Quick start
 
@@ -58,8 +82,8 @@ Commands for plans (`node src/cli.js --help` lists them all):
 ```sh
 node src/cli.js run docs/PLAN.md --base v1.2           # start from a tag, branch, or commit instead of origin's main branch
 node src/cli.js draft docs/PLAN.md --base main~3       # only draft; the exact commit and the ref are recorded in the plan
-node src/cli.js branches --repo ../VSTS                # where a plan would start, and recent branches to choose from
-node src/cli.js check --repo ../VSTS                   # ready? what a plan would leave out, and the checks at that commit
+node src/cli.js branches --repo ../my-app              # where a plan would start, and recent branches to choose from
+node src/cli.js check --repo ../my-app                 # ready? what a plan would leave out, and the checks at that commit
 node src/cli.js check --plan <id>                      # a draft's own checks at its start commit, before you start it
 node src/cli.js start <id>                             # start (or `stop <id>`) a plan's background runner
 node src/cli.js list                                   # all plans; `now:` names the task running or in review
@@ -122,6 +146,7 @@ command:
 | Review | `review <id>`: each task's diff, review verdict, and checks; the whole plan's diff and final review. |
 | Live activity | `activity <id>`: what the agents did most recently (tools and files, checks, reviews, commits). |
 | Fix it yourself | `fix-prompt <id>` gives an interactive Claude session the context (the app's Fix with Claude opens it in Terminal); `accept <task> --plan <id>` then checks your fix and commits it as the task. |
+| Models | `settings set claudeModel claude-sonnet-5-5` (or `default`); the app: Settings › Accounts › Models. Applies to plans started afterwards; each plan's Overview shows the model its agents ran on. `NIGHTSHIFT_CLAUDE_MODEL` overrides it. |
 | Limits | `limit <name> <value> --plan <id>` applies at once (the app: Limits › Change…); defaults are generous worst cases. A turn that runs out of time is retried with its changes kept. |
 | Merged elsewhere | `list` and `sync` notice plans merged by hand or on GitHub; the app moves them to the sidebar's archive. |
 | Pull request | `merge <id> --pr` pushes the plan branch and opens a pull request into the starting branch with `gh`; `settings set mergeStyle pr` makes it the default. |

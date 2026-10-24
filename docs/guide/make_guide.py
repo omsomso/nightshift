@@ -275,8 +275,8 @@ def cover(c, doc):
     c.setFont('Helvetica', 10)
     c.setFillColor(colors.HexColor('#B8C0DD'))
     c.drawString(MARGIN, 80 * mm, 'Version 0.6  •  October 2026')
-    c.drawString(MARGIN, 73 * mm, 'App: ~/CodexProjects/nightshift/app/build/Nightshift.app')
-    c.drawString(MARGIN, 66 * mm, 'Repository: ~/CodexProjects/nightshift  •  github.com/omsomso/nightshift (private)')
+    c.drawString(MARGIN, 73 * mm, 'App: app/build/Nightshift.app in your Nightshift folder (build it with app/build.sh)')
+    c.drawString(MARGIN, 66 * mm, 'Check your Mac first with: node src/cli.js doctor')
     c.restoreState()
 
 
@@ -324,17 +324,20 @@ s += [P('OVERVIEW', kicker), P('Nightshift in one page', h1),
 # ── Part 1: Set up ─────────────────────────────────────────────────────────────
 s += section(1, 'Set up once', 'A few minutes, once. After that you mostly use the app.')
 s += [numbered([
-          ('Install the command', 'In Terminal, from the Nightshift folder, run ' + m('node src/cli.js setup') + '. It records the '
+          ('Check your Mac', 'In Terminal, from the Nightshift folder, run ' + m('node src/cli.js doctor') + '. It lists what is there and what is '
+           'missing (Node.js, Git, Claude Code signed in with a subscription, and the optional extras), with the fix for each. It changes nothing.'),
+          ('Install the command', 'Run ' + m('node src/cli.js setup') + '. It records the '
            'installed Claude (and Codex) versions, checks that you are signed in with a subscription, and installs the '
            + m('nightshift') + ' command and the Nightshift skill for Claude and Codex chats. It needs Node 22.13 or newer.'),
           ('Open the app', 'Build it with ' + m('app/build.sh') + ' and open ' + m('app/build/Nightshift.app') + ' (copy it to '
            'Applications if you like). The moon in the menu bar shows your plans and fills in when one needs you.'),
           ('Check your accounts', 'Settings (Cmd-comma) › Accounts shows each provider, its version and sign-in, and an on/off switch. '
-           'Codex is off for now to save its usage; Claude then does both the work and the review, in separate conversations.'),
+           'Below them, <b>Models</b> picks the model for each provider\'s agents (by default, your account\'s default). With Codex off, Claude '
+           'does both the work and the review, in separate conversations.'),
           ('Choose how runs behave', 'Settings › Runs, shown below. The defaults are safe; the one you may want to turn on is '
            '"Start runners again when I log in".'),
       ]),
-      shot('settings-runs.png', 92 * mm, 'Settings › Runs. Every option here is also a command (nightshift settings, nightshift autostart).'),
+      shot('settings-runs.png', 66 * mm, 'Settings › Runs. Every option here is also a command (nightshift settings, nightshift autostart).'),
       ]
 
 # ── Part 2: Plan the work ──────────────────────────────────────────────────────
@@ -361,10 +364,10 @@ s += [P('A. In the app: Plan Studio', h2),
         + m('nightshift check --repo PATH') + ', <b>draft</b> the plan, show it to you, and start it only when you say so. '
         'This is the best way in when the project needs some work before Nightshift can start.'),
       P('C. From the terminal', h2),
-      code('''nightshift draft docs/plans/meter.md          # draft only; prints the plan
-nightshift draft docs/ROADMAP.md --steps "1-5"  # only some steps
-nightshift draft docs/ROADMAP.md --base main    # start from the local main
-nightshift run docs/ROADMAP.md                  # draft, ask once, then run'''),
+      code('''nightshift draft docs/plans/search.md         # draft only
+nightshift draft docs/ROADMAP.md --steps "1-5" # some steps
+nightshift draft docs/ROADMAP.md --base main   # from local main
+nightshift run docs/ROADMAP.md                 # draft, ask, run'''),
       callout('Where a plan starts', 'Nightshift fetches GitHub and starts from the project\'s main branch as it is there, so work '
               'merged from other sessions is included and your checkout does not matter. Unpushed commits, unmerged branches, and '
               'uncommitted changes are not included; the draft lists anything it leaves out. Use ' + m('--base') + ' (or Starts from) '
@@ -382,6 +385,7 @@ s += [shot('app-draft.png', FULL, 'A draft. The sidebar lists every plan and the
              ['Add to Queue', 'Runs the plan after the ones before it, for example overnight. Start the queue from the sidebar.'],
              ['Works / Reviews', 'Which agent does the work and which reviews it. With Codex off, Claude does both.'],
              ], [36 * mm, FULL - 36 * mm], bold_first=True),
+      shot('task-badges.png', 112 * mm, 'Each task\'s facts as badges: difficulty (click to change; hover for the planner\'s reason), effort, attempts.'),
       side('edit.png', 88 * mm, 'Edit: tasks, checks, and allowed folders.', [
           P('Editing a draft', h2),
           P('<b>Edit</b> opens the whole plan: reword a task or its "done when", move tasks up and down, remove one, or add your '

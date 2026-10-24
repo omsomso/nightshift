@@ -348,35 +348,35 @@ final class StudioModel {
     // conversation for checking the layout.
     func loadDemo() {
         phase = .conversation
-        repo = NSString(string: "~/CodexProjects/VSTS").expandingTildeInPath
+        repo = NSString(string: "~/Projects/notes-app").expandingTildeInPath
         pickedByAgent = true
         session = "demo"
-        defaultBase = BaseInfo(ref: "origin/main", commit: "35cfda769a29", subject: "Merge pull request #33", date: nil)
+        defaultBase = BaseInfo(ref: "origin/main", commit: "4f2c9a1b7e30", subject: "Merge pull request #18", date: nil)
         warnings = [GitWarning(kind: "unpushed", message: "Local main has 2 commits that origin/main does not; the plan will not include them.")]
         messages = [
-            ChatMessage(role: .owner, text: "reverb tail clicks when bypassing\npreset browser should remember last folder\nCPU spikes when resizing the UI"),
-            ChatMessage(role: .assistant, text: "These notes are about **VSTS**. I read the bypass path in the reverb processor and the preset browser. A few questions before I write the roadmap:")
+            ChatMessage(role: .owner, text: "the sign-in page should remember the email\nthe CSV export is missing the date column\nsearch gets slow with a few thousand items"),
+            ChatMessage(role: .assistant, text: "These notes are about **notes-app**. I read the sign-in form, the exporter, and the search index. A few questions before I write the roadmap:")
         ]
         questions = [
-            InterviewQuestion(question: "How should bypass handle the reverb tail?", options: [
-                InterviewOption(label: "Let the tail ring out", detail: "Most natural; bypass takes effect once the tail fades.", recommended: nil),
-                InterviewOption(label: "Short crossfade", detail: "About 20 ms; no click and no lingering tail.", recommended: true),
-                InterviewOption(label: "Cut immediately", detail: "Instant, with a tiny ramp to avoid the click.", recommended: nil)], multiple: false),
-            InterviewQuestion(question: "Which preset folders should be remembered?", options: [
-                InterviewOption(label: "Last folder only", detail: nil, recommended: nil),
-                InterviewOption(label: "Last folder per plugin", detail: "Each plugin opens where you left it.", recommended: true)], multiple: false),
-            InterviewQuestion(question: "Which UI sizes matter for the CPU fix?", options: [
-                InterviewOption(label: "Default", detail: nil, recommended: nil),
-                InterviewOption(label: "Large", detail: nil, recommended: nil),
-                InterviewOption(label: "Full screen", detail: nil, recommended: nil)], multiple: true)
+            InterviewQuestion(question: "How should the sign-in page remember the email?", options: [
+                InterviewOption(label: "Remember on this device", detail: "Filled in next time; cleared on sign-out.", recommended: true),
+                InterviewOption(label: "Ask with a checkbox", detail: "\"Remember me\", off by default.", recommended: nil),
+                InterviewOption(label: "Only within a session", detail: "Nothing is stored after the browser closes.", recommended: nil)], multiple: false),
+            InterviewQuestion(question: "Which date format should the export use?", options: [
+                InterviewOption(label: "ISO 8601 (2026-10-24)", detail: "Sorts correctly in every spreadsheet.", recommended: true),
+                InterviewOption(label: "The user's local format", detail: nil, recommended: nil)], multiple: false),
+            InterviewQuestion(question: "Which lists need fast search?", options: [
+                InterviewOption(label: "Notes", detail: nil, recommended: nil),
+                InterviewOption(label: "Tags", detail: nil, recommended: nil),
+                InterviewOption(label: "Attachments", detail: nil, recommended: nil)], multiple: true)
         ]
-        answers = ["How should bypass handle the reverb tail?": ["Short crossfade"]]
-        document = "# VSTS fixes: bypass, presets, resizing\n\nCovers three owner notes; leaves preset tagging for later.\n\n1. Crossfade the reverb on bypass...\n2. Remember the preset browser folder...\n3. Throttle repaints while resizing...\n"
+        answers = ["How should the sign-in page remember the email?": ["Remember on this device"]]
+        document = "# Notes app: sign-in, export, search\n\nCovers three owner notes; leaves full-text attachment search for later.\n\n1. Remember the email on the sign-in page...\n2. Add the date column to the CSV export...\n3. Index notes and tags so search stays fast...\n"
         syncedDocument = document
         revision = 2; updatedAt = Date().addingTimeInterval(-95); updatedBy = "Claude"; linesAdded = 4; linesRemoved = 1
-        previousDocument = "# VSTS fixes\n"
+        previousDocument = "# Notes app\n"
         messages.append(ChatMessage(role: .note, text: "Roadmap updated: revision 2, +4 −1 lines."))
-        documentPath = "docs/plans/vsts-fixes-bypass-presets-resizing.md"
+        documentPath = "docs/plans/sign-in-export-search.md"
         if ProcessInfo.processInfo.environment["NIGHTSHIFT_STUDIO_DEMO"] == "busy" { busy = "Thinking"; questions = [] }
     }
 }
@@ -443,7 +443,7 @@ struct StudioView: View {
                         .background(RoundedRectangle(cornerRadius: 10).fill(Color(nsColor: .textBackgroundColor)))
                         .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.secondary.opacity(0.25)))
                     if studio.notes.isEmpty {
-                        Text("e.g. reverb tail clicks when bypassing · preset browser should remember last folder · CPU spikes when resizing the UI…")
+                        Text("e.g. the sign-in page should remember the email · the CSV export is missing the date column · search gets slow with a few thousand items…")
                             .foregroundStyle(.tertiary).padding(16).allowsHitTesting(false)
                     }
                 }

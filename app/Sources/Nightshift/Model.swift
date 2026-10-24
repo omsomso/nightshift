@@ -39,6 +39,7 @@ struct Plan: Decodable, Identifiable, Hashable {
     let mergedOutside: String?
     let limitSettings: LimitSettings?
     let pauseReason: PauseReason?
+    let models: [String: String]?
     let tasks: [PlanTask]
     let limits: Limits?
     let lastEvent: LastEvent?
@@ -90,6 +91,7 @@ struct PlanTask: Decodable, Hashable {
     let difficultyReason: String?
     let effort: String?
     let skipped: Bool?
+    let ownerFixed: Bool?
 }
 
 struct CurrentTask: Decodable, Hashable {
@@ -484,6 +486,8 @@ struct RunSettings: Decodable, Hashable {
     let checkNetwork: Bool
     let mergeStyle: String
     let autostart: Bool
+    let claudeModel: String?
+    let codexModel: String?
 }
 
 // `nightshift review <id> --json`

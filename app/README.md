@@ -92,3 +92,7 @@ pull requests use GitHub's colours (open green, merged purple); the Limits card 
 Change… (all limits, applied at once, also to the turn in progress); a paused plan says
 who paused it and why; long panel texts fold with Show more. Screenshotted against the
 owner's real plans (archive, merged panel, limits editor).
+2026-10-24: a task's facts are one row of badges (difficulty, which opens a chooser on
+drafts and shows the planner's reason on hover; effort; attempts; skipped or fixed by
+you); Settings › Accounts has a Models section; Overview shows the model the agents ran
+on; Plan Studio's placeholder and demo are generic. Screenshotted against demo plans.

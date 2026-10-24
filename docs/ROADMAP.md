@@ -72,6 +72,8 @@ Exit: one real task and follow-up run through each adapter without desktop click
 - [x] Run project checks in a sandbox too (a VSTS cmake step wrote outside the worktree): `src/sandbox.js`.
 - [x] Wait for subscription usage-limit resets instead of failing; queue plans; restart runners at login.
 - [x] Review screen, draft editing, live activity, usage view, owner fixes (Fix with Claude, accept), pull-request approval.
+- [x] Shareable: `doctor` checks a new Mac; README starts with setup for anyone; no personal paths in code or the guide.
+- [ ] Choose a license before sharing the code (none yet: all rights reserved by default).
 - [ ] Check a real Claude/Codex usage-limit message against `src/limits.js` (only fixture shapes are tested).
 - [ ] Concurrent tasks within one plan and controlled integration between plans.
 - [ ] Bounded research/ideation tasks with recorded decision evidence.
@@ -85,6 +87,6 @@ read-only runs have all passed review (see the setup docs). Edit mode completed 
 plans on a toy project (claude:codex and codex:claude; see docs/EDIT_MODE.md).
 Neither adapter has run on the owner's VM or accessed existing chats. Commands run from
 an agent sandbox may lack network access to OpenAI; run live checks from a normal terminal.
-Run `npm test` (148 tests) and `npm run demo` for the offline baseline. The live smoke
+Run `npm test` (149 tests) and `npm run demo` for the offline baseline. The live smoke
 commands are separate and can consume provider usage. Their version pins are operator
 checks, not declarations that a specific release has been certified.
