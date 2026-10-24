@@ -73,7 +73,7 @@ Exit: one real task and follow-up run through each adapter without desktop click
 - [x] Wait for subscription usage-limit resets instead of failing; queue plans; restart runners at login.
 - [x] Review screen, draft editing, live activity, usage view, owner fixes (Fix with Claude, accept), pull-request approval.
 - [x] Shareable: `doctor` checks a new Mac; README starts with setup for anyone; no personal paths in code or the guide.
-- [ ] Choose a license before sharing the code (none yet: all rights reserved by default).
+- [x] License: GNU GPL v3 or later (`LICENSE`).
 - [ ] Check a real Claude/Codex usage-limit message against `src/limits.js` (only fixture shapes are tested).
 - [ ] Concurrent tasks within one plan and controlled integration between plans.
 - [ ] Bounded research/ideation tasks with recorded decision evidence.

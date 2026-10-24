@@ -14,7 +14,8 @@ request. Nothing reaches your real branch, and nothing is pushed, without your a
 - **Made for unattended runs.** Generous kill switches, waiting out usage limits, retrying
   timed-out turns, a queue, restarting after a reboot, and a morning review screen.
 
-The user guide is `docs/Nightshift-Guide.pdf`.
+The user guide is `docs/Nightshift-Guide.pdf`. Nightshift is open source under the GNU
+General Public License, version 3 or later (`LICENSE`). Copyright (C) 2026 omso.
 
 ## Use it on your own Mac
 
