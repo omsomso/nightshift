@@ -1,6 +1,7 @@
 {
   "name": "nightshift-supervisor",
   "version": "0.3.0",
+  "license": "GPL-3.0-or-later",
   "private": true,
   "type": "module",
   "description": "A local-first supervisor for unattended coding agents",
