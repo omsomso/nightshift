@@ -245,6 +245,6 @@ Workspace writes and the authenticated responsive UI come after this checkpoint.
 
 ## Git and remote setup
 
-The repository is hosted privately at https://github.com/omsomso/nightshift (branch
-`main`). No open-source license has been chosen. Runtime state (`.nightshift/`) and
-`.env` files are excluded from Git.
+The repository is hosted at https://github.com/omsomso/nightshift (branch `main`) under
+the GNU General Public License, version 3 or later (`LICENSE`). Runtime state
+(`.nightshift/`) and `.env` files are excluded from Git.
