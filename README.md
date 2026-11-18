@@ -14,6 +14,15 @@ request. Nothing reaches your real branch, and nothing is pushed, without your a
 - **Made for unattended runs.** Generous kill switches, waiting out usage limits, retrying
   timed-out turns, a queue, restarting after a reboot, and a morning review screen.
 
+![Plan Studio: notes become a roadmap after a few multiple-choice questions](docs/guide/img/studio.png)
+
+*Plan Studio turns quick notes into a roadmap. Claude reads the project and asks a few
+questions first.*
+
+<img src="docs/guide/img/review.png" alt="Reviewing a finished plan before merging" width="70%">
+
+*In the morning: the final review, the checks and every change, before you merge.*
+
 The user guide is `docs/Nightshift-Guide.pdf`. Nightshift is open source under the GNU
 General Public License, version 3 or later (`LICENSE`). Copyright (C) 2026 omso.
 
