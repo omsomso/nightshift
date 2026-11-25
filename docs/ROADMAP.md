@@ -74,6 +74,7 @@ Exit: one real task and follow-up run through each adapter without desktop click
 - [x] Review screen, draft editing, live activity, usage view, owner fixes (Fix with Claude, accept), pull-request approval.
 - [x] Shareable: `doctor` checks a new Mac; README starts with setup for anyone; no personal paths in code or the guide.
 - [x] License: GNU GPL v3 or later (`LICENSE`).
+- [x] Commits carry the owner's git identity and only the task title (no Nightshift author or plan/task trailers); merges are titled after the plan. Tested with fixtures (`test/edit.test.js`, `test/run.test.js`); not yet seen in a live plan.
 - [ ] Check a real Claude/Codex usage-limit message against `src/limits.js` (only fixture shapes are tested).
 - [ ] Concurrent tasks within one plan and controlled integration between plans.
 - [ ] Bounded research/ideation tasks with recorded decision evidence.
@@ -87,6 +88,6 @@ read-only runs have all passed review (see the setup docs). Edit mode completed 
 plans on a toy project (claude:codex and codex:claude; see docs/EDIT_MODE.md).
 Neither adapter has run on the owner's VM or accessed existing chats. Commands run from
 an agent sandbox may lack network access to OpenAI; run live checks from a normal terminal.
-Run `npm test` (150 tests) and `npm run demo` for the offline baseline. The live smoke
+Run `npm test` (151 tests) and `npm run demo` for the offline baseline. The live smoke
 commands are separate and can consume provider usage. Their version pins are operator
 checks, not declarations that a specific release has been certified.

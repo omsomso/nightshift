@@ -130,7 +130,7 @@ export async function mergePlan(id, { style = readConfig().mergeStyle ?? 'local'
   let merged;
   try {
     if (git(where, 'status', '--porcelain', '--ignore-submodules=dirty')) throw new Error(`${where} (where ${target} is checked out) has uncommitted changes; commit or stash them before merging.`);
-    try { git(where, 'merge', '--no-ff', '-m', `Merge Nightshift plan ${id}`, branch); }
+    try { git(where, 'merge', '--no-ff', '-m', `Merge ${id.replace(/[-_]+/g, ' ')}`, branch); }
     catch (error) {
       try { git(where, 'merge', '--abort'); } catch {}
       throw new Error(`Merging ${branch} into ${target} conflicted; nothing was changed. Merge it by hand. (${error.stderr?.trim() ?? error.message})`);

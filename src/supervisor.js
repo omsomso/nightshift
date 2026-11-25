@@ -296,7 +296,7 @@ export class Supervisor {
       task.reason = review.reason;
       if (review.passed && this.workspace) {
         try {
-          task.commit = this.workspace.commit(task, this.state.plan.id);
+          task.commit = this.workspace.commit(task);
           this.record(task.id, 'committed', task.commit);
         } catch (error) {
           this.block(task, error);
@@ -415,7 +415,7 @@ export class Supervisor {
       if (!checks.passed) return this.block(task, new BlockedError(`The owner's fix fails the checks:\n${checkDigest(checks).slice(0, 3000)}`)), true;
       task.review = { passed: true, reason: 'Fixed and accepted by the owner; the checks pass.' };
       task.reason = task.review.reason;
-      task.commit = this.workspace.commit(task, this.state.plan.id);
+      task.commit = this.workspace.commit(task);
       task.status = 'done';
       task.ownerFixed = true;
       this.record(task.id, 'committed', task.commit);

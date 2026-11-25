@@ -31,7 +31,11 @@ not by prompts alone.
 4. **Review**: a separate reviewer sees the task, the diff, and the check output, and
    judges acceptance *and* scope ("did this change only what the task asked?").
 5. **Commit**: on a pass, Nightshift commits the change itself. Agents never commit,
-   push, or merge.
+   push, or merge. The commit is made as the repository's own git user (the owner), with
+   the task title as its message; the plan state records which task made each commit. Only
+   a repository with no git identity configured gets commits named Nightshift. Merging an
+   approved plan makes a merge commit titled after the plan, such as "Merge speaker
+   headphone calibration".
 6. **Repair**: on a fail, the worker resumes its conversation with the check output
    and review reason, within the attempt limit.
 

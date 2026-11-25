@@ -79,6 +79,8 @@ function scriptedReviewer(decide = () => true) {
 
 test('a plan runs task by task, Nightshift commits each, and the branch waits for approval', async t => {
   const env = makeRepo(t);
+  git(env.repo, 'config', 'user.name', 'Owner');
+  git(env.repo, 'config', 'user.email', 'owner@example.invalid');
   const mainBefore = git(env.repo, 'rev-parse', 'HEAD');
   const reviewer = scriptedReviewer();
   const { store, supervisor } = startPlan(t, env, scriptedWorker(), reviewer);
@@ -86,8 +88,12 @@ test('a plan runs task by task, Nightshift commits each, and the branch waits fo
   const state = store.read();
   assert.equal(state.plan.status, 'awaiting-approval');
   assert.deepEqual(state.tasks.map(x => x.status), ['done', 'done']);
-  const log = git(env.repo, 'log', '--format=%an|%s|%(trailers:key=Nightshift-Task,valueonly,separator=)', 'nightshift/demo-plan', '-2');
-  assert.deepEqual(log.split('\n').filter(Boolean), ['Nightshift|Write note two|two', 'Nightshift|Write note one|one']);
+  // Commits are made as the repository's own user, with only the task title as the message.
+  const log = git(env.repo, 'log', '--format=%an <%ae>|%cn|%B', 'nightshift/demo-plan', '-2');
+  assert.deepEqual(log.split('\n').filter(Boolean),
+    ['Owner <owner@example.invalid>|Owner|Write note two', 'Owner <owner@example.invalid>|Owner|Write note one']);
+  assert.deepEqual(state.tasks.map(x => x.commit), git(env.repo, 'rev-list', '-2', '--reverse', 'nightshift/demo-plan').split('\n'),
+    'the plan state still records which task made each commit');
   assert.equal(git(env.repo, 'rev-parse', 'HEAD'), mainBefore, 'the owner checkout is untouched');
   assert.equal(git(env.repo, 'status', '--porcelain'), '');
   assert.ok(reviewer.calls[0].diff.includes('+one') && reviewer.calls[0].checks);
@@ -96,6 +102,21 @@ test('a plan runs task by task, Nightshift commits each, and the branch waits fo
   const report = cli(env, 'report');
   assert.match(report, /ready for your review and merge/);
   assert.match(report, /nightshift merge demo-plan/);
+});
+
+test('without a configured git identity, Nightshift commits under its own name instead of failing', async t => {
+  const env = makeRepo(t);
+  const saved = { global: process.env.GIT_CONFIG_GLOBAL, system: process.env.GIT_CONFIG_NOSYSTEM };
+  process.env.GIT_CONFIG_GLOBAL = '/dev/null';
+  process.env.GIT_CONFIG_NOSYSTEM = '1';
+  t.after(() => {
+    if (saved.global === undefined) delete process.env.GIT_CONFIG_GLOBAL; else process.env.GIT_CONFIG_GLOBAL = saved.global;
+    if (saved.system === undefined) delete process.env.GIT_CONFIG_NOSYSTEM; else process.env.GIT_CONFIG_NOSYSTEM = saved.system;
+  });
+  const { store, supervisor } = startPlan(t, env, scriptedWorker(), scriptedReviewer());
+  await supervisor.run();
+  assert.equal(store.read().plan.status, 'awaiting-approval');
+  assert.equal(git(env.repo, 'log', '--format=%an <%ae>', '-1', 'nightshift/demo-plan'), 'Nightshift <nightshift@local.invalid>');
 });
 
 test('failing checks send the task back with the check output, and a fix passes', async t => {

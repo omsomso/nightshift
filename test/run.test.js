@@ -78,7 +78,7 @@ test('one command drafts from a doc, runs in the background, and stops at approv
   const merged = e.json().plans.find(p => p.id === 'fixture-notes');
   assert.equal(merged.status, 'merged');
   assert.equal(merged.runner, false);
-  assert.match(git(e.repo, 'log', '-1', '--format=%s', 'main'), /Merge Nightshift plan fixture-notes/);
+  assert.match(git(e.repo, 'log', '-1', '--format=%s', 'main'), /^Merge fixture notes$/);
   assert.deepEqual(git(e.repo, 'ls-files', 'notes').split('\n').sort(), ['notes/.keep', 'notes/task-1.txt', 'notes/task-2.txt']);
 });
 
@@ -261,7 +261,7 @@ test('by default a plan starts from the fetched main branch, not the checkout, a
   // Approval merges into main (the base branch), not into the checked-out old-feature branch.
   assert.match(e.cli('merge', drafted.id), /into main/);
   assert.equal(git(e.repo, 'branch', '--show-current'), 'old-feature', 'the checkout was not switched');
-  assert.match(git(e.repo, 'log', '-1', '--format=%s', 'main'), /Merge Nightshift plan/);
+  assert.match(git(e.repo, 'log', '-1', '--format=%s', 'main'), /^Merge /);
   assert.equal(git(e.repo, 'rev-parse', 'old-feature~0'), git(e.repo, 'rev-parse', 'HEAD'));
   // The merge is local only, so the next plan would leave it out until it is pushed.
   const after = JSON.parse(e.cli('branches', '--repo', e.repo, '--json', '--no-fetch'));

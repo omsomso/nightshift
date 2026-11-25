@@ -118,15 +118,21 @@ export class Workspace {
     return createHash('sha256').update(change.diff).update(JSON.stringify(checks.results.map(r => [r.exitCode, r.output]))).digest('hex');
   }
 
-  commit(task, planId) {
+  commit(task) {
     // The worktree must still be this plan's branch in this repository before anything is committed.
     const branch = git(this.worktree, ['rev-parse', '--abbrev-ref', 'HEAD']).trim();
     const common = realpathSync(resolve(this.worktree, git(this.worktree, ['rev-parse', '--git-common-dir']).trim()));
     const expected = realpathSync(resolve(this.repo, git(this.repo, ['rev-parse', '--git-common-dir']).trim()));
     if (branch !== this.branch || common !== expected) throw new Error(`Worktree no longer points at ${this.branch} in ${this.repo}; refusing to commit.`);
     git(this.worktree, ['add', '-A']);
-    git(this.worktree, ['-c', 'user.name=Nightshift', '-c', 'user.email=nightshift@local.invalid', 'commit', '--no-verify', '-q',
-      '-m', task.title, '-m', `Nightshift-Plan: ${planId}\nNightshift-Task: ${task.id}`]);
+    // Commit as the repository's own git user, like the owner's other commits. The plan state
+    // records which task made each commit, so the message carries only the task's title. A
+    // Nightshift identity is used only where none is configured, so a finished task never
+    // fails on a missing identity.
+    const configured = key => { try { return git(this.worktree, ['config', '--get', key]).trim() !== ''; } catch { return false; } };
+    const identity = configured('user.name') && configured('user.email')
+      ? [] : ['-c', 'user.name=Nightshift', '-c', 'user.email=nightshift@local.invalid'];
+    git(this.worktree, [...identity, 'commit', '--no-verify', '-q', '-m', task.title]);
     return git(this.worktree, ['rev-parse', 'HEAD']).trim();
   }
 
