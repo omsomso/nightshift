@@ -349,6 +349,23 @@ test('project rules are collected once, snapshotted per plan, and reach every ed
     finalReviewPrompt(plan, { stat: '', reviewDiff: '' }, checks)]) assert.match(prompt, /Codeword HERON[\s\S]*end of project rules/);
 });
 
+test('untracked project rules reach a plan through the owner\'s checkout', async t => {
+  const env = makeRepo(t);
+  const { collectRules } = await import('../src/rules.js');
+  writeFileSync(join(env.repo, '.gitignore'), 'CLAUDE.md\n');
+  git(env.repo, 'add', '.gitignore');
+  git(env.repo, 'commit', '-q', '-m', 'ignore rules');
+  writeFileSync(join(env.repo, 'CLAUDE.md'), 'Private rule. Codeword OSPREY.\n');
+  const worktree = join(env.repo, '..', 'wt-untracked-rules');
+  git(env.repo, 'worktree', 'add', '-q', worktree);
+  assert.equal(existsSync(join(worktree, 'CLAUDE.md')), false);
+  const rules = collectRules(env.repo, { root: worktree });
+  assert.deepEqual(rules.map(r => r.path), ['AGENTS.md', 'CLAUDE.md']);
+  assert.match(rules[1].text, /Codeword OSPREY/);
+  writeFileSync(join(worktree, 'CLAUDE.md'), 'Worktree copy. Codeword WREN.\n');
+  assert.match(collectRules(env.repo, { root: worktree })[1].text, /Codeword WREN/, 'a copy in the worktree wins');
+});
+
 test('effort: rated difficulty sets the start, each retry goes one level up, reviewers stay fixed', async t => {
   const { workerEffort, validateEffort, codexEffort } = await import('../src/effort.js');
   const settings = validateEffort({});

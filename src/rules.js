@@ -12,9 +12,10 @@ const maxChars = 60_000;
 
 const digest = text => createHash('sha256').update(text.replace(/<!--[\s\S]*?-->/g, '').trim()).digest('hex');
 
-// Rules for a repository: its committed files (from `root`, which may be a worktree of it),
-// its local files, then instruction files in parent folders up to the home folder.
-// Identical texts (for example a generated AGENTS.md and CLAUDE.md) are included once.
+// Rules for a repository: its instruction files (from `root`, which may be a worktree of it; one the
+// repository keeps untracked is read from the owner's checkout instead), its local files, then instruction
+// files in parent folders up to the home folder. Identical texts (for example a generated AGENTS.md and
+// CLAUDE.md) are included once.
 export function collectRules(repo, { root = repo } = {}) {
   const found = [];
   const add = (path, label) => {
@@ -23,7 +24,7 @@ export function collectRules(repo, { root = repo } = {}) {
     if (!text.trim()) return;
     found.push({ path: label, sha256: digest(text), text });
   };
-  for (const name of ruleFiles) add(join(root, name), name);
+  for (const name of ruleFiles) add(existsSync(join(root, name)) ? join(root, name) : join(repo, name), name);
   for (const name of localFiles) add(join(repo, name), name);
   const home = homedir();
   for (let dir = dirname(resolve(repo)); dir.startsWith(home) && dir !== home; dir = dirname(dir)) {

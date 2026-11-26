@@ -73,7 +73,8 @@ branches changed in the last three days with commits the base lacks.
 Nightshift's sandboxed agents do not load project instructions on their own (Claude's
 restricted mode skips `CLAUDE.md`; verified 2026-10-15). Nightshift therefore collects
 them itself (`src/rules.js`): `AGENTS.md` and `CLAUDE.md` at the repository root (from the
-plan's base commit), `CLAUDE.local.md`/`AGENTS.local.md` from the owner's checkout, and
+plan's base commit, or from the owner's checkout when the repository keeps them
+untracked), `CLAUDE.local.md`/`AGENTS.local.md` from the owner's checkout, and
 `AGENTS.md`/`CLAUDE.md` in parent folders up to the home folder. Identical texts are
 included once. The set is snapshotted when the plan is created (`plan.rules`) and added
 to every planner, worker, reviewer, and final-review prompt, with an explicit
